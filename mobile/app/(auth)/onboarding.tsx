@@ -10,19 +10,21 @@ import {
   KeyboardAvoidingView,
   Platform,
   Image,
+  ScrollView,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { doc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { httpsCallable } from "firebase/functions";
 import { Ionicons } from "@expo/vector-icons";
 import * as Notifications from "expo-notifications";
 import * as Location from "expo-location";
 import * as ImagePicker from "expo-image-picker";
-import { db, storage } from "../../src/lib/firebase";
+import { db, storage, functions } from "../../src/lib/firebase";
 import { useAuth } from "../../src/hooks/useAuth";
 import { COLLECTIONS } from "../../src/constants/collections";
 
-const TOTAL_STEPS = 4;
+const TOTAL_STEPS = 5;
 
 export default function OnboardingScreen() {
   const { user, profile } = useAuth();
@@ -33,6 +35,13 @@ export default function OnboardingScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
   const [avatarUploading, setAvatarUploading] = useState(false);
+
+  // Questionnaire state
+  const [careerGoal, setCareerGoal] = useState("");
+  const [whyGarageScholars, setWhyGarageScholars] = useState("");
+  const [funFact, setFunFact] = useState("");
+  const [skills, setSkills] = useState("");
+  const [bioGenerating, setBioGenerating] = useState(false);
 
   // Permission states
   const [notifGranted, setNotifGranted] = useState<boolean | null>(null);
@@ -238,6 +247,108 @@ export default function OnboardingScreen() {
     </View>
   );
 
+  const handleBioGeneration = async () => {
+    if (!careerGoal.trim()) {
+      Alert.alert("Required", "Please tell us about your career goals.");
+      return;
+    }
+    setBioGenerating(true);
+    try {
+      const generateBio = httpsCallable(functions, "generateScholarBio");
+      await generateBio({
+        answers: {
+          careerGoal: careerGoal.trim(),
+          whyGarageScholars: whyGarageScholars.trim(),
+          funFact: funFact.trim(),
+          skills: skills.trim(),
+        },
+      });
+      goNext();
+    } catch (err: any) {
+      console.error("[Onboarding] Bio generation error:", err);
+      // Still proceed — bio can be regenerated later
+      Alert.alert(
+        "Bio Saved",
+        "We saved your answers but couldn't generate the bio right now. It will be generated later.",
+        [{ text: "Continue", onPress: goNext }]
+      );
+    } finally {
+      setBioGenerating(false);
+    }
+  };
+
+  const renderStepQuestionnaire = () => (
+    <ScrollView
+      style={{ flex: 1, width: "100%" }}
+      contentContainerStyle={{ alignItems: "center", paddingBottom: 40 }}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
+    >
+      <View style={styles.iconCircle}>
+        <Ionicons name="school-outline" size={40} color="#14b8a6" />
+      </View>
+      <Text style={styles.stepTitle}>Tell Us About You</Text>
+      <Text style={styles.stepSubtitle}>
+        We'll use your answers to create a short bio that gets sent to clients before their appointment.
+      </Text>
+
+      <TextInput
+        style={styles.questionInput}
+        value={careerGoal}
+        onChangeText={setCareerGoal}
+        placeholder="What are your career goals? *"
+        placeholderTextColor="#5a6a80"
+        multiline
+        textAlignVertical="top"
+      />
+      <TextInput
+        style={styles.questionInput}
+        value={whyGarageScholars}
+        onChangeText={setWhyGarageScholars}
+        placeholder="Why did you join Garage Scholars?"
+        placeholderTextColor="#5a6a80"
+        multiline
+        textAlignVertical="top"
+      />
+      <TextInput
+        style={styles.questionInput}
+        value={skills}
+        onChangeText={setSkills}
+        placeholder="Skills or experience you bring"
+        placeholderTextColor="#5a6a80"
+        multiline
+        textAlignVertical="top"
+      />
+      <TextInput
+        style={styles.questionInput}
+        value={funFact}
+        onChangeText={setFunFact}
+        placeholder="A fun fact about you"
+        placeholderTextColor="#5a6a80"
+        multiline
+        textAlignVertical="top"
+      />
+
+      <TouchableOpacity
+        style={[styles.primaryBtn, (!careerGoal.trim() || bioGenerating) && styles.btnDisabled]}
+        onPress={handleBioGeneration}
+        disabled={!careerGoal.trim() || bioGenerating}
+      >
+        {bioGenerating ? (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <ActivityIndicator size="small" color="#fff" />
+            <Text style={styles.primaryBtnText}>Generating your bio...</Text>
+          </View>
+        ) : (
+          <>
+            <Text style={styles.primaryBtnText}>Continue</Text>
+            <Ionicons name="arrow-forward" size={18} color="#fff" />
+          </>
+        )}
+      </TouchableOpacity>
+    </ScrollView>
+  );
+
   const renderStepNotifications = () => (
     <View style={styles.stepContent}>
       <View style={styles.iconCircle}>
@@ -323,8 +434,10 @@ export default function OnboardingScreen() {
       case 2:
         return renderStepAvatar();
       case 3:
-        return renderStepNotifications();
+        return renderStepQuestionnaire();
       case 4:
+        return renderStepNotifications();
+      case 5:
         return renderStepLocation();
       default:
         return null;
@@ -463,6 +576,19 @@ const styles = StyleSheet.create({
     borderColor: "#2a3545",
     marginBottom: 20,
     textAlign: "center",
+  },
+  questionInput: {
+    width: "100%",
+    backgroundColor: "#1a2332",
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: "#f1f5f9",
+    borderWidth: 1,
+    borderColor: "#2a3545",
+    marginBottom: 12,
+    minHeight: 56,
   },
   primaryBtn: {
     width: "100%",

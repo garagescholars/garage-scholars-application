@@ -1241,3 +1241,154 @@ export const gsExportPaymentData = onCall(
     return { data: payouts, count: payouts.length };
   }
 );
+
+// ═══════════════════════════════════════════════════════════════
+// 12. CALLABLE: Create & send Stripe invoice to customer via email
+// ═══════════════════════════════════════════════════════════════
+export const gsCreateInvoice = onCall(
+  { cors: true, timeoutSeconds: 30, secrets: ["STRIPE_SECRET_KEY"] },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Authentication required.");
+    }
+
+    // Verify admin
+    const profileSnap = await db.collection(GS_COLLECTIONS.PROFILES).doc(request.auth.uid).get();
+    if (!profileSnap.exists || profileSnap.data()?.role !== "admin") {
+      throw new HttpsError("permission-denied", "Admin role required.");
+    }
+
+    const {
+      customerName,
+      customerEmail,
+      amount,
+      description,
+      jobId,
+      packageTier,
+      lineItems,
+    } = request.data as {
+      customerName: string;
+      customerEmail: string;
+      amount: number;
+      description?: string;
+      jobId?: string;
+      packageTier?: string;
+      lineItems?: Array<{ name: string; amount: number }>;
+    };
+
+    if (!customerName || !customerEmail || !amount) {
+      throw new HttpsError(
+        "invalid-argument",
+        "customerName, customerEmail, and amount are required."
+      );
+    }
+
+    const stripe = getStripe();
+
+    // Find or create Stripe Customer
+    let stripeCustomer: any;
+    const existingCustomers = await stripe.customers.list({
+      email: customerEmail,
+      limit: 1,
+    });
+    if (existingCustomers.data.length > 0) {
+      stripeCustomer = existingCustomers.data[0];
+      // Update name if needed
+      if (stripeCustomer.name !== customerName) {
+        stripeCustomer = await stripe.customers.update(stripeCustomer.id, {
+          name: customerName,
+        });
+      }
+    } else {
+      stripeCustomer = await stripe.customers.create({
+        email: customerEmail,
+        name: customerName,
+        metadata: { platform: "garage_scholars" },
+      });
+    }
+
+    // Create Stripe Invoice
+    const invoice = await stripe.invoices.create({
+      customer: stripeCustomer.id,
+      collection_method: "send_invoice",
+      days_until_due: 3,
+      description: description || `Garage Scholars — ${packageTier || "Service"} Package`,
+      metadata: {
+        jobId: jobId || "",
+        packageTier: packageTier || "",
+        platform: "garage_scholars",
+      },
+    });
+
+    // Add line items
+    if (lineItems && lineItems.length > 0) {
+      for (const item of lineItems) {
+        await stripe.invoiceItems.create({
+          customer: stripeCustomer.id,
+          invoice: invoice.id,
+          amount: Math.round(item.amount * 100), // cents
+          currency: "usd",
+          description: item.name,
+        });
+      }
+    } else {
+      // Single line item for the total
+      await stripe.invoiceItems.create({
+        customer: stripeCustomer.id,
+        invoice: invoice.id,
+        amount: Math.round(amount * 100),
+        currency: "usd",
+        description: description || `${packageTier || "Service"} Package`,
+      });
+    }
+
+    // Finalize and send the invoice — Stripe emails the customer automatically
+    const finalizedInvoice = await stripe.invoices.finalizeInvoice(invoice.id);
+    await stripe.invoices.sendInvoice(invoice.id);
+
+    // Record in Firestore
+    await db.collection(GS_COLLECTIONS.CUSTOMER_PAYMENTS).add({
+      customerId: stripeCustomer.id,
+      customerName,
+      customerEmail,
+      jobId: jobId || null,
+      amount,
+      type: "invoice",
+      stripeInvoiceId: invoice.id,
+      stripePaymentIntentId: finalizedInvoice.payment_intent || null,
+      paymentMethod: "invoice",
+      convenienceFee: 0,
+      totalCharged: amount,
+      status: "pending",
+      description: description || `${packageTier || "Service"} Package`,
+      invoiceUrl: finalizedInvoice.hosted_invoice_url || null,
+      invoicePdf: finalizedInvoice.invoice_pdf || null,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+
+    // Also send a confirmation email via our own mail system
+    await db.collection("mail").add({
+      to: ["garagescholars@gmail.com"],
+      message: {
+        subject: `Invoice Sent: ${customerName} — $${amount.toFixed(2)}`,
+        html: `<h2>Invoice Sent</h2>
+          <p><strong>Client:</strong> ${customerName}</p>
+          <p><strong>Email:</strong> ${customerEmail}</p>
+          <p><strong>Amount:</strong> $${amount.toFixed(2)}</p>
+          <p><strong>Package:</strong> ${packageTier || "N/A"}</p>
+          <p><strong>Stripe Invoice:</strong> ${invoice.id}</p>
+          <p>The client will receive a Stripe-hosted payment link via email.</p>`,
+      },
+      createdAt: FieldValue.serverTimestamp(),
+    });
+
+    console.log(`Invoice ${invoice.id} created and sent to ${customerEmail} for $${amount}`);
+
+    return {
+      invoiceId: invoice.id,
+      invoiceUrl: finalizedInvoice.hosted_invoice_url,
+      invoicePdf: finalizedInvoice.invoice_pdf,
+      status: finalizedInvoice.status,
+    };
+  }
+);

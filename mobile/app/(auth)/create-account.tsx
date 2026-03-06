@@ -21,6 +21,7 @@ type RoleOption = "scholar" | "customer";
 export default function CreateAccountScreen() {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [role, setRole] = useState<RoleOption>("scholar");
@@ -33,6 +34,7 @@ export default function CreateAccountScreen() {
   // Track focus states
   const [nameFocused, setNameFocused] = useState(false);
   const [emailFocused, setEmailFocused] = useState(false);
+  const [phoneFocused, setPhoneFocused] = useState(false);
   const [passwordFocused, setPasswordFocused] = useState(false);
   const [confirmFocused, setConfirmFocused] = useState(false);
 
@@ -63,10 +65,28 @@ export default function CreateAccountScreen() {
       await addDoc(collection(db, COLLECTIONS.SIGNUP_REQUESTS), {
         fullName: fullName.trim(),
         email: normalizedEmail,
+        phone: phone.trim() || null,
         password,
         role,
         status: "pending",
         createdAt: serverTimestamp(),
+      });
+
+      // Send admin notification email
+      await addDoc(collection(db, "mail"), {
+        to: ["garagescholars@gmail.com", "admin@garagescholars.com"],
+        message: {
+          subject: `New Account Request — ${fullName.trim()} (${role})`,
+          html:
+            `<h2>New Account Request</h2>` +
+            `<p><strong>Name:</strong> ${fullName.trim()}</p>` +
+            `<p><strong>Email:</strong> ${normalizedEmail}</p>` +
+            `<p><strong>Phone:</strong> ${phone.trim() || "Not provided"}</p>` +
+            `<p><strong>Role:</strong> ${role}</p>` +
+            `<hr>` +
+            `<p>Log in to the admin app to approve or reject this request.</p>` +
+            `<p style="color:#888;font-size:12px;">Sent from the Garage Scholars mobile app</p>`,
+        },
       });
 
       router.replace("/(auth)/pending-approval");
@@ -177,6 +197,36 @@ export default function CreateAccountScreen() {
                 autoComplete="email"
                 onFocus={() => setEmailFocused(true)}
                 onBlur={() => setEmailFocused(false)}
+                returnKeyType="next"
+                editable={!loading}
+              />
+            </View>
+
+            {/* Phone Number */}
+            <Text style={styles.label}>Phone Number</Text>
+            <View
+              style={[
+                styles.inputWrapper,
+                phoneFocused && styles.inputWrapperFocused,
+              ]}
+            >
+              <Ionicons
+                name="call-outline"
+                size={20}
+                color={phoneFocused ? "#14b8a6" : "#5a6a80"}
+                style={styles.inputIcon}
+              />
+              <TextInput
+                style={styles.input}
+                value={phone}
+                onChangeText={setPhone}
+                placeholder="(555) 555-5555"
+                placeholderTextColor="#5a6a80"
+                keyboardType="phone-pad"
+                autoCapitalize="none"
+                autoCorrect={false}
+                onFocus={() => setPhoneFocused(true)}
+                onBlur={() => setPhoneFocused(false)}
                 returnKeyType="next"
                 editable={!loading}
               />

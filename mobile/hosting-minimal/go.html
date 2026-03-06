@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Garage Scholars - Get the App</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0f1b2d;
+      color: #f8fafc;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+    }
+    .container { padding: 24px; max-width: 400px; }
+    .logo { font-size: 28px; font-weight: 800; margin-bottom: 8px; }
+    .subtitle { color: #94a3b8; font-size: 14px; margin-bottom: 24px; }
+    .spinner {
+      border: 3px solid #1e293b;
+      border-top: 3px solid #14b8a6;
+      border-radius: 50%;
+      width: 36px; height: 36px;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto 20px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #status { color: #94a3b8; font-size: 15px; margin-bottom: 16px; }
+    .hidden { display: none; }
+    .btn {
+      display: inline-block;
+      background: #14b8a6;
+      color: #fff;
+      font-weight: 700;
+      font-size: 16px;
+      padding: 14px 32px;
+      border-radius: 10px;
+      text-decoration: none;
+      margin-bottom: 20px;
+    }
+    .install-links { margin-top: 24px; }
+    .install-links p { color: #64748b; font-size: 13px; margin-bottom: 10px; }
+    .install-links a {
+      color: #14b8a6;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .install-links a:hover { text-decoration: underline; }
+    .step { color: #94a3b8; font-size: 13px; line-height: 1.6; margin-bottom: 6px; }
+    .steps { margin-top: 24px; text-align: left; padding: 16px; background: #1e293b; border-radius: 12px; }
+    .steps-title { color: #f8fafc; font-weight: 700; font-size: 14px; margin-bottom: 10px; }
+    .error { color: #ef4444; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo">Garage Scholars</div>
+    <div class="subtitle">Junk removal made easy</div>
+
+    <div id="loading">
+      <div class="spinner"></div>
+      <p id="status">Opening app...</p>
+    </div>
+
+    <div id="fallback" class="hidden">
+      <a id="open-btn" class="btn" href="#">Open in Expo Go</a>
+
+      <div class="steps">
+        <div class="steps-title">First time? Here's how:</div>
+        <p class="step">1. Download <strong>Expo Go</strong> (links below)</p>
+        <p class="step">2. Come back here and tap <strong>"Open in Expo Go"</strong></p>
+        <p class="step">3. Create your account and log in</p>
+      </div>
+
+      <div class="install-links">
+        <p>Don't have Expo Go yet?</p>
+        <a href="https://apps.apple.com/app/expo-go/id982107779">iPhone (App Store)</a>
+        &nbsp;&bull;&nbsp;
+        <a href="https://play.google.com/store/apps/details?id=host.exp.exponent">Android (Google Play)</a>
+      </div>
+    </div>
+
+    <div id="no-url" class="hidden">
+      <p class="error">App link not configured yet.</p>
+      <p class="step" style="margin-top: 8px;">Please ask an admin to set up the download URL.</p>
+    </div>
+  </div>
+
+  <script>
+    var PROJECT_ID = 'garage-scholars-v2';
+    var DOC_PATH = 'gs_platformConfig/mobileApp';
+    var API_URL = 'https://firestore.googleapis.com/v1/projects/' + PROJECT_ID +
+      '/databases/(default)/documents/' + DOC_PATH;
+
+    fetch(API_URL)
+      .then(function(r) { return r.json(); })
+      .then(function(doc) {
+        var url = doc.fields && doc.fields.downloadUrl && doc.fields.downloadUrl.stringValue;
+        if (url) {
+          // Try to redirect immediately
+          window.location.href = url;
+
+          // After 1.5s, show manual button in case redirect didn't trigger
+          setTimeout(function() {
+            document.getElementById('loading').classList.add('hidden');
+            document.getElementById('fallback').classList.remove('hidden');
+            document.getElementById('open-btn').href = url;
+          }, 1500);
+        } else {
+          document.getElementById('loading').classList.add('hidden');
+          document.getElementById('no-url').classList.remove('hidden');
+        }
+      })
+      .catch(function() {
+        document.getElementById('status').textContent = 'Could not load. Please try again.';
+        document.getElementById('status').classList.add('error');
+        document.querySelector('.spinner').style.display = 'none';
+      });
+  </script>
+</body>
+</html>

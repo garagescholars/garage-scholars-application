@@ -1,0 +1,10 @@
+{
+  "buildCommand": "npx expo export --platform web",
+  "outputDirectory": "dist",
+  "framework": null,
+  "rewrites": [
+    { "source": "/phone-auth.html", "destination": "/phone-auth.html" },
+    { "source": "/go.html", "destination": "/go.html" },
+    { "source": "/((?!_expo|assets|favicon\\.ico|metadata\\.json).*)", "destination": "/index.html" }
+  ]
+}

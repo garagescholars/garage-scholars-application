@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useEffect } from "react";
 import { Modal, View, StyleSheet, ActivityIndicator, Text, TouchableOpacity, Platform } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
@@ -15,8 +15,22 @@ const AUTH_PAGE_BASE = "https://garage-scholars-scheduling.web.app/phone-auth.ht
 
 export default function PhoneAuthWebView({ visible, phoneNumber, onVerificationId, onError, onCancel }: Props) {
   const webViewRef = useRef<WebView>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Auto-timeout after 20 seconds if reCAPTCHA doesn't resolve
+  useEffect(() => {
+    if (visible) {
+      timeoutRef.current = setTimeout(() => {
+        onError("Verification timed out. Please try again or use email login instead.");
+      }, 60000);
+    }
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, [visible]);
 
   const handleMessage = (event: WebViewMessageEvent) => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
     try {
       const data = JSON.parse(event.nativeEvent.data);
       if (data.type === "verificationId") {
@@ -42,21 +56,29 @@ export default function PhoneAuthWebView({ visible, phoneNumber, onVerificationI
         <View style={styles.card}>
           <View style={styles.header}>
             <ActivityIndicator size="small" color="#14b8a6" />
-            <Text style={styles.headerText}>Sending verification code...</Text>
+            <Text style={styles.headerText}>Verify you're human</Text>
           </View>
           <Text style={styles.subText}>
-            A reCAPTCHA check is running to verify you're not a bot.
+            Tap the reCAPTCHA checkbox below, then we'll send your verification code.
           </Text>
 
           {visible && (
-            <WebView
-              ref={webViewRef}
-              source={{ uri }}
-              onMessage={handleMessage}
-              style={styles.webview}
-              javaScriptEnabled
-              domStorageEnabled
-            />
+            <View style={styles.webviewContainer}>
+              <WebView
+                ref={webViewRef}
+                source={{ uri }}
+                onMessage={handleMessage}
+                onError={() => onError("Failed to load verification page. Check your internet connection.")}
+                onHttpError={() => onError("Verification page returned an error.")}
+                style={styles.webview}
+                javaScriptEnabled
+                domStorageEnabled
+                thirdPartyCookiesEnabled
+                sharedCookiesEnabled
+                mixedContentMode="compatibility"
+                originWhitelist={["*"]}
+              />
+            </View>
           )}
 
           <TouchableOpacity style={styles.cancelBtn} onPress={onCancel}>
@@ -99,10 +121,16 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     marginBottom: 12,
   },
+  webviewContainer: {
+    height: 200,
+    width: "100%",
+    overflow: "hidden",
+    borderRadius: 8,
+    backgroundColor: "#0f1b2d",
+  },
   webview: {
-    height: 1,
-    width: 1,
-    opacity: 0,
+    flex: 1,
+    backgroundColor: "#0f1b2d",
   },
   cancelBtn: {
     alignItems: "center",

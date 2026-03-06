@@ -14,6 +14,7 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { useAuth } from "../../src/hooks/useAuth";
 import { colors, layout } from "../../src/constants/theme";
+import { ADMIN_EMAILS } from "../../src/constants/config";
 
 type NavItem = {
   label: string;
@@ -47,6 +48,15 @@ function WebSidebar() {
         <Text style={sidebarStyles.headerText}>Garage Scholars</Text>
       </View>
       <ScrollView style={sidebarStyles.nav} showsVerticalScrollIndicator={false}>
+        {/* View as Scholar button */}
+        <TouchableOpacity
+          style={sidebarStyles.scholarViewBtn}
+          onPress={() => router.push("/(scholar)/jobs" as any)}
+        >
+          <Ionicons name="eye-outline" size={16} color="#fff" />
+          <Text style={sidebarStyles.scholarViewText}>View as Scholar</Text>
+        </TouchableOpacity>
+
         {NAV_ITEMS.map((item) => {
           const isActive = pathname.startsWith(item.path.replace("/(admin)", ""));
           const showGroupLabel = item.group && item.group !== lastGroup;
@@ -317,5 +327,21 @@ const sidebarStyles = StyleSheet.create({
   navLabelActive: {
     color: colors.brand.teal,
     fontWeight: "600",
+  },
+  scholarViewBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginHorizontal: 12,
+    marginBottom: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    backgroundColor: colors.brand.teal,
+  },
+  scholarViewText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#fff",
   },
 });

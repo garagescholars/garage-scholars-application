@@ -90,7 +90,12 @@ function resizePhoto(file, maxDim, quality) {
     return new Promise(function(resolve, reject) {
         var img = new Image();
         var objectUrl = URL.createObjectURL(file);
+        var timeout = setTimeout(function() {
+            URL.revokeObjectURL(objectUrl);
+            reject(new Error('Photo "' + file.name + '" took too long to process. It may be in an unsupported format (e.g. HEIC). Please use JPG or PNG.'));
+        }, 15000);
         img.onload = function() {
+            clearTimeout(timeout);
             URL.revokeObjectURL(objectUrl);
             var w = img.width, h = img.height;
             if (w > maxDim || h > maxDim) {
@@ -103,7 +108,11 @@ function resizePhoto(file, maxDim, quality) {
             var dataUrl = canvas.toDataURL('image/jpeg', quality);
             resolve(dataUrl.split(',')[1]);
         };
-        img.onerror = function() { URL.revokeObjectURL(objectUrl); reject(); };
+        img.onerror = function() {
+            clearTimeout(timeout);
+            URL.revokeObjectURL(objectUrl);
+            reject(new Error('Could not load "' + file.name + '". Please use JPG or PNG format.'));
+        };
         img.src = objectUrl;
     });
 }

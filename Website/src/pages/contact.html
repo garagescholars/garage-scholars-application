@@ -54,6 +54,21 @@
             var email = document.getElementById('contact-email').value;
             var message = document.getElementById('contact-message').value;
             db.collection('contactSubmissions').add({ name: name, email: email, message: message, submittedAt: firebase.firestore.FieldValue.serverTimestamp() })
+                .then(function() {
+                    // Send admin notification email via Firebase Send Email extension
+                    return db.collection('mail').add({
+                        to: ['garagescholars@gmail.com', 'admin@garagescholars.com'],
+                        message: {
+                            subject: 'New Contact Form Submission — ' + name,
+                            html: '<h2>New Contact Form Submission</h2>' +
+                                '<p><strong>Name:</strong> ' + name + '</p>' +
+                                '<p><strong>Email:</strong> ' + email + '</p>' +
+                                '<p><strong>Message:</strong></p>' +
+                                '<p>' + message.replace(/\n/g, '<br>') + '</p>' +
+                                '<hr><p style="color:#888;font-size:12px;">Sent from the Garage Scholars website contact form</p>'
+                        }
+                    });
+                })
                 .then(function() { btn.textContent = 'Sent!'; btn.style.background = 'var(--color-primary-dark)'; e.target.reset(); setTimeout(function() { btn.textContent = 'Submit'; btn.style.background = ''; btn.disabled = false; }, 3000); })
                 .catch(function(err) { console.error(err); btn.textContent = 'Error - Try Again'; btn.style.background = 'var(--color-error)'; setTimeout(function() { btn.textContent = 'Submit'; btn.style.background = ''; btn.disabled = false; }, 3000); });
         }

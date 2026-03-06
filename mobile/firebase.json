@@ -5,11 +5,8 @@
   "hosting": [
     {
       "target": "scheduling",
-      "public": "dist",
-      "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
-      "rewrites": [
-        { "source": "**", "destination": "/index.html" }
-      ]
+      "public": "hosting-minimal",
+      "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
     },
     {
       "target": "complaint",

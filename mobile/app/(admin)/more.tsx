@@ -1,4 +1,4 @@
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
@@ -57,8 +57,40 @@ const MENU_ITEMS: MenuItem[] = [
 export default function MoreScreen() {
   const router = useRouter();
 
+  const handleViewAsScholar = () => {
+    Alert.alert(
+      "View as Scholar",
+      "Switch to the scholar view to see what scholars see — available jobs, my jobs, goals, and profile.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Switch to Scholar View",
+          onPress: () => router.push("/(scholar)/jobs"),
+        },
+      ]
+    );
+  };
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.scroll}>
+      {/* Scholar View Button */}
+      <TouchableOpacity
+        style={styles.scholarViewBtn}
+        onPress={handleViewAsScholar}
+        activeOpacity={0.7}
+      >
+        <View style={styles.scholarViewIcon}>
+          <Ionicons name="eye-outline" size={22} color="#fff" />
+        </View>
+        <View style={styles.textWrap}>
+          <Text style={styles.scholarViewLabel}>View as Scholar</Text>
+          <Text style={styles.scholarViewSubtitle}>
+            Preview the scholar experience — jobs feed, check-in, goals
+          </Text>
+        </View>
+        <Ionicons name="arrow-forward" size={18} color="#14b8a6" />
+      </TouchableOpacity>
+
       <Text style={styles.heading}>Admin Tools</Text>
       {MENU_ITEMS.map((item) => (
         <TouchableOpacity
@@ -92,6 +124,27 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     marginBottom: 12,
   },
+  scholarViewBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#14b8a615",
+    borderWidth: 1,
+    borderColor: "#14b8a640",
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 20,
+    gap: 14,
+  },
+  scholarViewIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: "#14b8a6",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  scholarViewLabel: { fontSize: 15, fontWeight: "700", color: "#14b8a6" },
+  scholarViewSubtitle: { fontSize: 12, color: "#8b9bb5", marginTop: 2 },
   menuItem: {
     flexDirection: "row",
     alignItems: "center",

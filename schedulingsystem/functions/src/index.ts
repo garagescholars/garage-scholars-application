@@ -788,7 +788,7 @@ export const sendJobReviewEmail = onDocumentWritten("serviceJobs/{jobId}", async
 
     // Write to 'mail' collection (monitored by Firebase Email Extension)
     await db.collection('mail').add({
-      to: ['garagescholars@gmail.com'], // Centralized review inbox
+      to: ['garagescholars@gmail.com', 'admin@garagescholars.com'], // Centralized review inbox
       message: {
         subject: `🔔 Review Required: ${afterData.clientName} - $${afterData.pay}`,
         html: emailHtml,
@@ -1031,7 +1031,7 @@ export const submitQuoteRequest = onCall(
     `;
 
     await db.collection('mail').add({
-      to: ['garagescholars@gmail.com'],
+      to: ['garagescholars@gmail.com', 'admin@garagescholars.com'],
       message: {
         subject: `📋 New Quote Request: ${name} - ${serviceTypeLabels[serviceType] || serviceType} (${packageLabels[packageTier] || 'No package'})`,
         html: emailHtml,

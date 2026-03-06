@@ -1,17 +1,20 @@
 import { useEffect } from "react";
 import { Tabs, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { Platform, View, ActivityIndicator } from "react-native";
+import { Platform, View, Text, TouchableOpacity, ActivityIndicator } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { useAuth } from "../../src/hooks/useAuth";
 import { useAchievementUnlock } from "../../src/hooks/useAchievementUnlock";
 import AchievementUnlockOverlay from "../../src/components/AchievementUnlockOverlay";
+import { ADMIN_EMAILS } from "../../src/constants/config";
 import { colors, layout } from "../../src/constants/theme";
 
 export default function ScholarLayout() {
   const { user, loading } = useAuth();
   const router = useRouter();
   const { newAchievement, dismiss } = useAchievementUnlock(user?.uid);
+
+  const isAdmin = user?.email ? ADMIN_EMAILS.includes(user.email.toLowerCase()) : false;
 
   useEffect(() => {
     if (loading) return;
@@ -30,6 +33,35 @@ export default function ScholarLayout() {
 
   return (
     <View style={{ flex: 1 }}>
+      {/* Admin preview banner */}
+      {isAdmin && (
+        <TouchableOpacity
+          style={{
+            backgroundColor: "#14b8a6",
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "center",
+            paddingVertical: 8,
+            paddingTop: Platform.OS === "ios" ? 50 : 8,
+            gap: 8,
+          }}
+          onPress={() => router.replace("/(admin)/jobs")}
+        >
+          <Ionicons name="arrow-back" size={16} color="#fff" />
+          <Text style={{ color: "#fff", fontSize: 13, fontWeight: "700" }}>
+            Back to Admin View
+          </Text>
+          <View style={{
+            backgroundColor: "#ffffff30",
+            paddingHorizontal: 8,
+            paddingVertical: 2,
+            borderRadius: 4,
+            marginLeft: 4,
+          }}>
+            <Text style={{ color: "#fff", fontSize: 11, fontWeight: "600" }}>PREVIEW MODE</Text>
+          </View>
+        </TouchableOpacity>
+      )}
       <Tabs
         screenOptions={{
           headerStyle: { backgroundColor: colors.bg.primary },

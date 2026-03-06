@@ -105,6 +105,18 @@ service cloud.firestore {
       allow read, update, delete: if isAdminByEmail();
     }
 
+    // Contact form submissions — anyone can submit
+    match /contactSubmissions/{docId} {
+      allow create: if true;
+      allow read, update, delete: if isAdminByEmail();
+    }
+
+    // Firebase Send Email extension — anyone can create, only extension processes
+    match /mail/{docId} {
+      allow create: if true;
+      allow read, update, delete: if false;
+    }
+
     match /sops/{sopId} {
       allow read: if isAdmin() || (resource.data.qaStatus == 'APPROVED' && isJobParticipant(resource.data.jobId));
       allow write: if isAdmin();
@@ -257,6 +269,75 @@ service cloud.firestore {
       // mobileApp doc is public (contains download URL for QR code redirect page)
       allow read: if isAdminByEmail() || configId == 'mobileApp';
       allow write: if isAdminByEmail();
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Social Media & Review Campaign Collections
+    // ═══════════════════════════════════════════════════════════
+
+    // gs_socialContentQueue — social media post queue
+    match /gs_socialContentQueue/{contentId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdminByEmail();
+      allow delete: if isAdminByEmail();
+    }
+
+    // gs_reviewCampaigns — Google review request campaigns
+    match /gs_reviewCampaigns/{campaignId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdminByEmail();
+      allow delete: if isAdminByEmail();
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Escalation, Prep & Activity Feed Collections
+    // ═══════════════════════════════════════════════════════════
+
+    // gs_escalations — scholar job escalations
+    match /gs_escalations/{escalationId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isAdminByEmail();
+      allow delete: if isAdminByEmail();
+    }
+
+    // gs_jobPrep — video homework / prep materials
+    match /gs_jobPrep/{prepId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn();
+      allow delete: if isAdminByEmail();
+    }
+
+    // gs_activityFeed — activity feed
+    match /gs_activityFeed/{activityId} {
+      allow read: if isSignedIn();
+      allow write: if false; // functions only
+    }
+
+    // gs_resale_donation_items — resale/donation items from jobs
+    match /gs_resale_donation_items/{itemId} {
+      allow read: if isSignedIn();
+      allow write: if isAdminByEmail();
+    }
+
+    // gs_donation_receipts — donation receipt records
+    match /gs_donation_receipts/{receiptId} {
+      allow read: if isSignedIn();
+      allow write: if isAdminByEmail();
+    }
+
+    // gs_gym_install_photos — gym equipment install photos
+    match /gs_gym_install_photos/{photoId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // quoteRequests — website quote submissions
+    match /quoteRequests/{requestId} {
+      allow read: if isAdminByEmail();
+      allow create: if true; // public form submission
+      allow update: if isAdminByEmail();
+      allow delete: if isAdminByEmail();
     }
 
     // ═══════════════════════════════════════════════════════════

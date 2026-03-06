@@ -182,6 +182,9 @@ export default function AdminLeadsScreen() {
   // Disqualify confirmation
   const [disqualifyConfirmId, setDisqualifyConfirmId] = useState<string | null>(null);
 
+  // Invoice
+  const [invoiceSending, setInvoiceSending] = useState(false);
+
   // ══════════════════════════════════════════════════
   // Firestore subscription
   // ══════════════════════════════════════════════════
@@ -277,6 +280,56 @@ export default function AdminLeadsScreen() {
       estimatedHours: defaults.estimatedHours,
     }));
   }, []);
+
+  const handleSendInvoice = useCallback(async () => {
+    if (!convertingLead || !functions) return;
+
+    const email = convertFormData.clientEmail.trim();
+    const name = convertFormData.clientName.trim();
+    const price = convertFormData.clientPrice;
+
+    if (!email) {
+      setError("Client email is required to send an invoice.");
+      return;
+    }
+    if (!name) {
+      setError("Client name is required to send an invoice.");
+      return;
+    }
+    if (!price || price <= 0) {
+      setError("Client price must be greater than $0.");
+      return;
+    }
+
+    setInvoiceSending(true);
+    setError(null);
+
+    try {
+      const callable = httpsCallable(functions, "gsCreateInvoice");
+      const result = await callable({
+        customerName: name,
+        customerEmail: email,
+        amount: price,
+        description: `${PACKAGE_LABELS[convertFormData.selectedPackage] || convertFormData.selectedPackage} Package — ${convertFormData.address.trim() || "Garage Organization"}`,
+        jobId: convertingLead.id,
+        packageTier: convertFormData.selectedPackage,
+      });
+
+      const data = result.data as { invoiceId?: string; invoiceUrl?: string };
+      if (Platform.OS === "web") {
+        setError(null);
+        setSopError(null);
+        alert(`Invoice sent to ${email}!\n\nStripe Invoice: ${data.invoiceId}`);
+      } else {
+        Alert.alert("Invoice Sent", `Invoice emailed to ${email}.`);
+      }
+    } catch (err: any) {
+      const msg = err?.message || "Failed to send invoice.";
+      setError(msg);
+    } finally {
+      setInvoiceSending(false);
+    }
+  }, [convertingLead, convertFormData]);
 
   const handleConvertSubmit = useCallback(async () => {
     if (!db || !convertingLead || !functions) return;
@@ -1573,6 +1626,28 @@ export default function AdminLeadsScreen() {
               </TouchableOpacity>
               <TouchableOpacity
                 style={[
+                  styles.footerBtnInvoice,
+                  { flex: 1 },
+                  (invoiceSending || sopGenerating) && styles.btnDisabled,
+                ]}
+                onPress={handleSendInvoice}
+                disabled={invoiceSending || sopGenerating}
+                activeOpacity={0.7}
+              >
+                {invoiceSending ? (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    <ActivityIndicator size="small" color="#fff" />
+                    <Text style={styles.footerBtnInvoiceText}>Sending...</Text>
+                  </View>
+                ) : (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    <Ionicons name="receipt-outline" size={16} color="#fff" />
+                    <Text style={styles.footerBtnInvoiceText}>Send Invoice</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
                   styles.footerBtnPrimary,
                   { flex: 1 },
                   (sopGenerating || busyId === convertingLead?.id) && styles.btnDisabled,
@@ -2161,6 +2236,21 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
     color: "#f1f5f9",
+  },
+  footerBtnInvoice: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    backgroundColor: "#6366f1",
+    borderRadius: 12,
+  },
+  footerBtnInvoiceText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#fff",
   },
   footerBtnPrimary: {
     flexDirection: "row",

@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.submitQuoteRequest = exports.sendJobReviewEmail = exports.declineSignup = exports.approveSignup = exports.gsGenerateAssemblyGuide = exports.generateSopForJob = exports.gsHiringVideoReminder = exports.gsVerifyVideoAccess = exports.gsHiringWeeklyDigest = exports.gsProcessInterviewScore = exports.gsCalBookingWebhook = exports.gsProcessVideoCompletion = exports.gsScoreHiringApplication = exports.gsResaleDripNotifications = exports.gsOnConversationReply = exports.gsOnConversationCreated = exports.gsOnItemSold = exports.gsOnResaleStatusChange = exports.gsOnDonationReceiptUploaded = exports.gsOnGymPhotosUploaded = exports.gsOnItemConfirmed = exports.gsAnalyzeItem = exports.gsReviewCampaign = exports.gsRefreshMetaToken = exports.gsProcessSocialContent = exports.gsExportPaymentData = exports.gsGeneratePaymentReport = exports.gsMarkPayoutPaid = exports.gsResalePayout = exports.gsCreateRetentionSubscription = exports.gsCreateCustomerPayment = exports.gsStripeWebhook = exports.gsCreateStripeAccount = exports.gsReleaseCompletionPayouts = exports.gsJobPrepReminders = exports.gsOnEscalationCreated = exports.gsMultiNotify = exports.gsSendPush = exports.gsSubmitComplaint = exports.gsComputeAnalytics = exports.gsMonthlyGoalReset = exports.gsResetViewerCounts = exports.gsExpireTransfers = exports.gsLockScores = exports.gsOnRescheduleUpdated = exports.gsOnTransferCreated = exports.gsOnJobUpdated = void 0;
+exports.generateScholarBio = exports.submitQuoteRequest = exports.sendJobReviewEmail = exports.declineSignup = exports.approveSignup = exports.gsGenerateAssemblyGuide = exports.generateSopForJob = exports.gsHiringVideoReminder = exports.gsVerifyVideoAccess = exports.gsHiringWeeklyDigest = exports.gsProcessInterviewScore = exports.gsCalBookingWebhook = exports.gsProcessVideoCompletion = exports.gsScoreHiringApplication = exports.gsResaleDripNotifications = exports.gsOnConversationReply = exports.gsOnConversationCreated = exports.gsOnItemSold = exports.gsOnResaleStatusChange = exports.gsOnDonationReceiptUploaded = exports.gsOnGymPhotosUploaded = exports.gsOnItemConfirmed = exports.gsAnalyzeItem = exports.gsReviewCampaign = exports.gsRefreshMetaToken = exports.gsProcessSocialContent = exports.gsCreateInvoice = exports.gsExportPaymentData = exports.gsGeneratePaymentReport = exports.gsMarkPayoutPaid = exports.gsResalePayout = exports.gsCreateRetentionSubscription = exports.gsCreateCustomerPayment = exports.gsStripeWebhook = exports.gsCreateStripeAccount = exports.gsReleaseCompletionPayouts = exports.gsJobPrepReminders = exports.gsOnEscalationCreated = exports.gsMultiNotify = exports.gsSendPush = exports.gsSubmitComplaint = exports.gsComputeAnalytics = exports.gsMonthlyGoalReset = exports.gsResetViewerCounts = exports.gsExpireTransfers = exports.gsLockScores = exports.gsOnRescheduleUpdated = exports.gsOnTransferCreated = exports.gsOnJobUpdated = void 0;
 const https_1 = require("firebase-functions/v2/https");
 const firestore_1 = require("firebase-functions/v2/firestore");
 const app_1 = require("firebase-admin/app");
@@ -75,6 +75,7 @@ Object.defineProperty(exports, "gsResalePayout", { enumerable: true, get: functi
 Object.defineProperty(exports, "gsMarkPayoutPaid", { enumerable: true, get: function () { return gs_payments_1.gsMarkPayoutPaid; } });
 Object.defineProperty(exports, "gsGeneratePaymentReport", { enumerable: true, get: function () { return gs_payments_1.gsGeneratePaymentReport; } });
 Object.defineProperty(exports, "gsExportPaymentData", { enumerable: true, get: function () { return gs_payments_1.gsExportPaymentData; } });
+Object.defineProperty(exports, "gsCreateInvoice", { enumerable: true, get: function () { return gs_payments_1.gsCreateInvoice; } });
 // ── Garage Scholars Social Media functions ──
 var gs_social_1 = require("./gs-social");
 Object.defineProperty(exports, "gsProcessSocialContent", { enumerable: true, get: function () { return gs_social_1.gsProcessSocialContent; } });
@@ -1916,7 +1917,7 @@ exports.sendJobReviewEmail = (0, firestore_1.onDocumentWritten)("serviceJobs/{jo
     `;
         // Write to 'mail' collection (monitored by Firebase Email Extension)
         await db.collection('mail').add({
-            to: ['garagescholars@gmail.com'], // Centralized review inbox
+            to: ['garagescholars@gmail.com', 'admin@garagescholars.com'], // Centralized review inbox
             message: {
                 subject: `🔔 Review Required: ${afterData.clientName} - $${afterData.pay}`,
                 html: emailHtml,
@@ -1962,29 +1963,51 @@ exports.submitQuoteRequest = (0, https_1.onCall)({ cors: true, timeoutSeconds: 1
             source: 'website'
         });
         console.log(`Quote request created: ${quoteRequestRef.id}`);
-        // Step 3: Create draft job with LEAD status (before photo upload so we have jobId for path)
-        const draftJobRef = await db.collection('serviceJobs').add({
+        const serviceTypeLabels = {
+            'get-clean': 'Get Clean',
+            'get-organized': 'Get Organized',
+            'get-strong': 'Get Strong',
+            'resale': 'Resale Concierge',
+            'cleaning': 'Cleaning',
+            'organization': 'Organization',
+            'gym': 'Gym Setup',
+            'full': 'Full Transformation'
+        };
+        // Step 3: Create draft job with LEAD status in gs_jobs (the collection the admin app watches)
+        const draftJobRef = await db.collection('gs_jobs').add({
             clientName: name,
             clientEmail: email,
             clientPhone: phone,
             clientId,
             clientFolder,
+            title: `${name} — ${serviceTypeLabels[serviceType] || serviceType}`,
             address: zipcode ? `ZIP: ${zipcode}` : 'Address TBD',
             zipcode: zipcode,
             description: description || 'New lead from website quote form',
-            date: new Date().toISOString(),
-            scheduledEndTime: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
-            pay: 0,
+            scheduledDate: new Date().toISOString(),
+            scheduledTimeStart: '',
+            scheduledTimeEnd: '',
+            payout: 0,
             clientPrice: 0,
             status: 'LEAD',
-            locationLat: 0,
-            locationLng: 0,
+            lat: 0,
+            lng: 0,
+            urgencyLevel: 'standard',
+            rushBonus: 0,
+            currentViewers: 0,
+            viewerFloor: 0,
+            totalViews: 0,
+            reopenCount: 0,
             checklist: [],
             serviceType,
             package: packageTier || null,
             garageSize: garageSize || null,
             intakeMediaPaths: [],
+            intakeImageUrls: [],
             quoteRequestId: quoteRequestRef.id,
+            source: 'website',
+            claimedBy: null,
+            claimedByName: null,
             createdAt: firestore_2.FieldValue.serverTimestamp(),
             updatedAt: firestore_2.FieldValue.serverTimestamp()
         });
@@ -2030,16 +2053,6 @@ exports.submitQuoteRequest = (0, https_1.onCall)({ cors: true, timeoutSeconds: 1
             }
         }
         // Step 5: Send email notification to admin (use signed URLs for photos)
-        const serviceTypeLabels = {
-            'get-clean': 'Get Clean',
-            'get-organized': 'Get Organized',
-            'get-strong': 'Get Strong',
-            'resale': 'Resale Concierge',
-            'cleaning': 'Cleaning',
-            'organization': 'Organization',
-            'gym': 'Gym Setup',
-            'full': 'Full Transformation'
-        };
         const packageLabels = {
             'undergraduate': 'Undergraduate',
             'graduate': 'Graduate',
@@ -2114,7 +2127,7 @@ exports.submitQuoteRequest = (0, https_1.onCall)({ cors: true, timeoutSeconds: 1
 </html>
     `;
         await db.collection('mail').add({
-            to: ['garagescholars@gmail.com'],
+            to: ['garagescholars@gmail.com', 'admin@garagescholars.com'],
             message: {
                 subject: `📋 New Quote Request: ${name} - ${serviceTypeLabels[serviceType] || serviceType} (${packageLabels[packageTier] || 'No package'})`,
                 html: emailHtml,
@@ -2135,5 +2148,75 @@ exports.submitQuoteRequest = (0, https_1.onCall)({ cors: true, timeoutSeconds: 1
     catch (error) {
         console.error('Error submitting quote request:', error.message, error.stack);
         throw new https_1.HttpsError("internal", `Failed to submit quote request: ${error.message}`);
+    }
+});
+// ─── Generate Scholar Bio ─────────────────────────────────────────────
+exports.generateScholarBio = (0, https_1.onCall)({ timeoutSeconds: 60, memory: "256MiB", secrets: ["ANTHROPIC_API_KEY"] }, async (request) => {
+    if (!request.auth) {
+        throw new https_1.HttpsError("unauthenticated", "Authentication required.");
+    }
+    const { answers } = request.data;
+    if (!answers || !answers.careerGoal) {
+        throw new https_1.HttpsError("invalid-argument", "Missing questionnaire answers.");
+    }
+    const anthropicKey = process.env.ANTHROPIC_API_KEY;
+    if (!anthropicKey) {
+        throw new https_1.HttpsError("failed-precondition", "ANTHROPIC_API_KEY is not configured.");
+    }
+    const uid = request.auth.uid;
+    // Get scholar profile for name
+    const profileSnap = await db.collection("gs_profiles").doc(uid).get();
+    const scholarName = profileSnap.data()?.fullName || "This scholar";
+    const prompt = `Write a warm, professional ~300-word bio for a Garage Scholars team member. This bio will be sent to homeowner clients the day before their service appointment to introduce the scholar who will be working on their garage.
+
+Scholar name: ${scholarName}
+
+Questionnaire answers:
+- Career goal / what they're working toward: ${answers.careerGoal}
+- Why they joined Garage Scholars: ${answers.whyGarageScholars || "Not provided"}
+- A fun fact about them: ${answers.funFact || "Not provided"}
+- Skills or experience they bring: ${answers.skills || "Not provided"}
+
+Write in third person. Be genuine, encouraging, and professional. Highlight their aspirations and what makes them a great fit for the team. Do NOT use bullet points — write flowing paragraphs. Keep it to approximately 300 words.`;
+    try {
+        const response = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "x-api-key": anthropicKey,
+                "anthropic-version": "2023-06-01",
+            },
+            body: JSON.stringify({
+                model: "claude-haiku-4-5-20251001",
+                max_tokens: 1024,
+                messages: [{ role: "user", content: prompt }],
+            }),
+        });
+        if (!response.ok) {
+            const errText = await response.text();
+            console.error("Anthropic API error:", errText);
+            throw new https_1.HttpsError("internal", "AI bio generation failed.");
+        }
+        const result = await response.json();
+        const bio = result.content?.[0]?.text || "Bio generation failed — please try again.";
+        // Save bio to scholar profile
+        await db.collection("gs_scholarProfiles").doc(uid).update({
+            bio,
+            bioGeneratedAt: firestore_2.FieldValue.serverTimestamp(),
+            onboardingAnswers: answers,
+            updatedAt: firestore_2.FieldValue.serverTimestamp(),
+        });
+        // Also save to gs_profiles
+        await db.collection("gs_profiles").doc(uid).update({
+            bio,
+            updatedAt: firestore_2.FieldValue.serverTimestamp(),
+        });
+        return { success: true, bio };
+    }
+    catch (err) {
+        if (err instanceof https_1.HttpsError)
+            throw err;
+        console.error("Bio generation error:", err);
+        throw new https_1.HttpsError("internal", "Failed to generate bio.");
     }
 });

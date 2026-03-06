@@ -137,8 +137,21 @@ export default function LoginScreen() {
           </Animated.View>
         </Animated.View>
 
+        <Animated.View entering={FadeInDown.delay(300).duration(500).springify()} style={styles.altLinks}>
+          <Pressable onPress={() => router.push("/(auth)/email-login")}>
+            <Text style={styles.altLinkText}>
+              Sign in with <Text style={styles.altLinkAccent}>email</Text> instead
+            </Text>
+          </Pressable>
+          <Pressable onPress={() => router.push("/(auth)/create-account")}>
+            <Text style={styles.altLinkText}>
+              Don't have an account? <Text style={styles.altLinkAccent}>Create one</Text>
+            </Text>
+          </Pressable>
+        </Animated.View>
+
         <Animated.Text
-          entering={FadeInDown.delay(300).duration(500).springify()}
+          entering={FadeInDown.delay(400).duration(500).springify()}
           style={styles.disclaimer}
         >
           By continuing, you agree to receive SMS messages for verification.
@@ -258,6 +271,19 @@ const styles = StyleSheet.create({
     color: "#ffffff",
     fontSize: 16,
     fontWeight: "700",
+  },
+  altLinks: {
+    alignItems: "center",
+    gap: 14,
+    marginBottom: 24,
+  },
+  altLinkText: {
+    fontSize: 14,
+    color: "#8b9bb5",
+  },
+  altLinkAccent: {
+    color: "#14b8a6",
+    fontWeight: "600",
   },
   disclaimer: {
     fontSize: 12,
