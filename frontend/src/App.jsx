@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { db, auth } from './firebase';
 import { collection, onSnapshot, query, orderBy, where, limit, doc, getDoc, updateDoc } from 'firebase/firestore';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { Package, Plus, LogOut, LayoutGrid, Settings as SettingsIcon, MessageSquare, Menu, X, DollarSign, TrendingUp, Bell, Search, RefreshCw, Activity, CheckCircle2, XCircle, Loader2, Clock, BarChart3, Zap, Archive } from 'lucide-react';
+import { Package, Plus, LogOut, LayoutGrid, Settings as SettingsIcon, MessageSquare, Menu, X, DollarSign, TrendingUp, Bell, Search, RefreshCw, Activity, CheckCircle2, XCircle, Loader2, Clock, BarChart3, Zap, Archive, Shield, Wallet } from 'lucide-react';
 
 import { ToastProvider, useToast } from './context/ToastContext';
 import AddListingModal from './components/AddListingModal';
@@ -10,6 +10,8 @@ import Login from './components/Login';
 import MessagesView from './components/MessagesView';
 import NotificationsPanel from './components/NotificationsPanel';
 import JobDetailDrawer from './components/JobDetailDrawer';
+import ReviewQueue from './components/ReviewQueue';
+import PayoutTracker from './components/PayoutTracker';
 
 const ALLOWED_EMAILS = [
   "tylerzsodia@gmail.com",
@@ -167,6 +169,7 @@ function AppContent() {
   const grossRevenue = soldInventory.reduce((sum, i) => sum + (parseFloat(i.price) || 0), 0);
   const unreadCount = conversations.filter(c => c.isUnread === true).length;
   const pendingCount = inventory.filter(i => i.status === 'Pending' || i.status === 'Running').length;
+  const reviewCount = inventory.filter(i => i.status === 'Needs Review').length;
   const avgSalePrice = soldInventory.length > 0 ? grossRevenue / soldInventory.length : 0;
 
   const successfulJobs = automationJobs.filter(j => j.status === 'succeeded').length;
@@ -199,11 +202,13 @@ function AppContent() {
 
   // Helpers
   const statusClassMap = {
+    'Needs Review': 'bg-amber-500/10 border-amber-500/50 text-amber-400',
     Pending: 'bg-slate-500/10 border-slate-500/40 text-slate-300',
     Running: 'bg-blue-500/10 border-blue-500/50 text-blue-400',
     Active: 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400',
     Error: 'bg-rose-500/10 border-rose-500/50 text-rose-400',
     'Compliance Error': 'bg-amber-500/10 border-amber-500/50 text-amber-400',
+    Denied: 'bg-rose-500/10 border-rose-500/30 text-rose-300',
   };
 
   const progressIcon = (state) => {
@@ -271,6 +276,8 @@ function AppContent() {
         <nav className="flex-1 px-4 space-y-2 mt-4 md:mt-0">
           <SidebarItem icon={<LayoutGrid size={20} />} label="Dashboard" active={activeTab === 'dashboard'} onClick={() => { setActiveTab('dashboard'); setIsMobileMenuOpen(false); }} />
           <SidebarItem icon={<Package size={20} />} label="Inventory" active={activeTab === 'inventory'} onClick={() => { setActiveTab('inventory'); setIsMobileMenuOpen(false); }} badge={pendingCount > 0 ? pendingCount : null} />
+          <SidebarItem icon={<Shield size={20} />} label="Review Queue" active={activeTab === 'review'} onClick={() => { setActiveTab('review'); setIsMobileMenuOpen(false); }} badge={reviewCount > 0 ? reviewCount : null} />
+          <SidebarItem icon={<Wallet size={20} />} label="Payouts" active={activeTab === 'payouts'} onClick={() => { setActiveTab('payouts'); setIsMobileMenuOpen(false); }} />
           <SidebarItem icon={<MessageSquare size={20} />} label="Messages" active={activeTab === 'messages'} onClick={() => { setActiveTab('messages'); setIsMobileMenuOpen(false); }} badge={unreadCount > 0 ? unreadCount : null} />
           <SidebarItem icon={<SettingsIcon size={20} />} label="Settings" active={activeTab === 'settings'} onClick={() => { setActiveTab('settings'); setIsMobileMenuOpen(false); }} />
 
@@ -321,7 +328,7 @@ function AppContent() {
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <DashboardCard title="Avg Sale Price" value={`$${avgSalePrice.toFixed(0)}`} icon={<BarChart3 className="text-amber-400" />} />
                 <DashboardCard title="Success Rate" value={`${successRate}%`} icon={<Zap className="text-yellow-400" />} />
-                <DashboardCard title="Pending Jobs" value={pendingCount} icon={<Loader2 className="text-blue-400" />} />
+                <DashboardCard title="Needs Review" value={reviewCount} icon={<Shield className="text-amber-400" />} onClick={() => setActiveTab('review')} />
                 <DashboardCard title="Unread Messages" value={unreadCount} icon={<Bell className="text-yellow-400" />} />
               </div>
 
@@ -405,6 +412,12 @@ function AppContent() {
             </div>
           )}
 
+          {/* ==================== REVIEW QUEUE ==================== */}
+          {activeTab === 'review' && <ReviewQueue inventory={inventory} />}
+
+          {/* ==================== PAYOUTS ==================== */}
+          {activeTab === 'payouts' && <PayoutTracker soldInventory={soldInventory} />}
+
           {/* ==================== MESSAGES ==================== */}
           {activeTab === 'messages' && <MessagesView />}
 
@@ -426,10 +439,12 @@ function AppContent() {
                 </div>
                 <select className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white outline-none" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
                   <option value="All">All Status</option>
+                  <option value="Needs Review">Needs Review</option>
                   <option value="Pending">Pending</option>
                   <option value="Running">Running</option>
                   <option value="Active">Active</option>
                   <option value="Error">Error</option>
+                  <option value="Denied">Denied</option>
                 </select>
                 <select className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white outline-none" value={platformFilter} onChange={e => setPlatformFilter(e.target.value)}>
                   <option value="All">All Platforms</option>
@@ -638,9 +653,10 @@ function SidebarItem({ icon, label, active, onClick, badge }) {
   );
 }
 
-function DashboardCard({ title, value, icon, highlight }) {
+function DashboardCard({ title, value, icon, highlight, onClick }) {
+  const Tag = onClick ? 'button' : 'div';
   return (
-    <div className={`border p-4 rounded-xl shadow-lg flex items-center gap-3 ${highlight ? 'bg-emerald-500/10 border-emerald-500/50' : 'bg-slate-900 border-slate-800'}`}>
+    <Tag onClick={onClick} className={`border p-4 rounded-xl shadow-lg flex items-center gap-3 text-left ${highlight ? 'bg-emerald-500/10 border-emerald-500/50' : 'bg-slate-900 border-slate-800'} ${onClick ? 'hover:bg-slate-800 cursor-pointer transition-colors' : ''}`}>
       <div className={`p-2.5 rounded-full border ${highlight ? 'bg-emerald-500/20 border-emerald-500/50' : 'bg-slate-950 border-slate-800'}`}>
         {icon}
       </div>
@@ -648,7 +664,7 @@ function DashboardCard({ title, value, icon, highlight }) {
         <p className={`text-[10px] uppercase font-bold tracking-wider ${highlight ? 'text-emerald-400' : 'text-slate-500'}`}>{title}</p>
         <p className={`text-xl font-bold ${highlight ? 'text-emerald-300' : 'text-white'}`}>{value}</p>
       </div>
-    </div>
+    </Tag>
   );
 }
 

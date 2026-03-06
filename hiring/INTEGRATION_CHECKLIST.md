@@ -195,8 +195,8 @@ gsHiringWeeklyDigest → Pipeline summary email to founders
   - Events: `BOOKING_CREATED`
   - Secret: `gs-hiring-webhook-2026`
 - [x] Booking page live: `https://cal.com/garagescholars/interview` (verified Mar 1)
-- [ ] Connect `admin@garagescholars.com` Google Calendar in Cal.com settings *(Manual — Tyler)*
-  - Then share admin calendar with personal Gmail accounts for visibility
+- [x] `admin@garagescholars.com` Google Calendar connected in Cal.com
+  - Share admin calendar with personal Gmail accounts for visibility as needed
 - [x] E2E test: Webhook fires → dossier email received (tested Mar 1)
 
 ---

@@ -1,0 +1,9 @@
+{
+  "name": "Copy of Garage Scholars schedule system",
+  "description": "Internal job management and quality assurance app for Garage Scholars employees.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}

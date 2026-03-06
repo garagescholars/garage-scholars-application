@@ -31,10 +31,10 @@ const CONDITION_MAP = {
     'VERY GOOD': { id: 2000, label: 'VERY_GOOD' },
     'VERY_GOOD': { id: 2000, label: 'VERY_GOOD' },
     'GOOD': { id: 2500, label: 'GOOD' },
-    'USED': { id: 3000, label: 'USED_EXCELLENT' },
+    'USED': { id: 3000, label: 'USED' },
     'ACCEPTABLE': { id: 4000, label: 'USED_ACCEPTABLE' },
-    'REFURBISHED': { id: 2000, label: 'SELLER_REFURBISHED' },
-    'SELLER_REFURBISHED': { id: 2000, label: 'SELLER_REFURBISHED' },
+    'REFURBISHED': { id: 3500, label: 'SELLER_REFURBISHED' },
+    'SELLER_REFURBISHED': { id: 3500, label: 'SELLER_REFURBISHED' },
     'FOR PARTS': { id: 7000, label: 'FOR_PARTS_OR_NOT_WORKING' },
     'FOR_PARTS': { id: 7000, label: 'FOR_PARTS_OR_NOT_WORKING' },
     'NOT WORKING': { id: 7000, label: 'FOR_PARTS_OR_NOT_WORKING' }
@@ -211,6 +211,9 @@ const runEbayListing = async ({ inventoryId, item, publicTitle, publicDescriptio
     if (imageResult.warnings.length > 0) {
         logger.warn('eBay image validation warnings', { warnings: imageResult.warnings, inventoryId });
     }
+    if (imageResult.valid.length === 0) {
+        throw new Error('No valid images for eBay listing — at least 1 required');
+    }
 
     try {
         // Step 1: Upsert inventory item
@@ -219,7 +222,7 @@ const runEbayListing = async ({ inventoryId, item, publicTitle, publicDescriptio
             product: {
                 title: publicTitle.slice(0, 80), // eBay max title length
                 description: description.slice(0, 4000), // Reasonable description limit
-                imageUrls: imageResult.valid.length > 0 ? imageResult.valid : (item.imageUrls || [])
+                imageUrls: imageResult.valid
             }
         });
 
@@ -235,7 +238,7 @@ const runEbayListing = async ({ inventoryId, item, publicTitle, publicDescriptio
                     categoryId,
                     listingDescription: description.slice(0, 4000),
                     merchantLocationKey,
-                    conditionId: String(condition.id),
+                    conditionId: condition.id,
                     listingPolicies: {
                         fulfillmentPolicyId,
                         paymentPolicyId,

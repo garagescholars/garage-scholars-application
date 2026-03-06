@@ -27,6 +27,7 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // --- Configuration ---
 const HEADLESS = process.env.HEADLESS !== 'false';
+const DRY_RUN = process.env.DRY_RUN === 'true';
 const WORKER_ID = process.env.WORKER_ID || `${require('os').hostname()}-${process.pid}`;
 
 // --- Payment info (required env vars, no defaults) ---
@@ -455,7 +456,7 @@ async function runListingAutomation(docId, item, db, admin) {
 
                 // Step 2: Location
                 try {
-                    const clLocationCode = process.env.CL_LOCATION_CODE || 'fsd';
+                    const clLocationCode = process.env.CL_LOCATION_CODE || 'den';
                     await page.waitForSelector(`input[value="${clLocationCode}"]`, { timeout: 3000 });
                     await humanDelay(300, 700);
                     await page.click(`input[value="${clLocationCode}"]`);
@@ -537,7 +538,11 @@ async function runListingAutomation(docId, item, db, admin) {
                     const emailField = await trySelectors(page, CL_SELECTORS.email, 2000);
                     if (emailField) {
                         const emailValue = await page.evaluate(el => el.value, emailField);
-                        if (!emailValue) await humanType(page, emailField, process.env.CL_EMAIL || 'garagescholars@gmail.com', { typoChance: 0 });
+                        if (!emailValue) {
+                            const clEmail = process.env.CL_EMAIL;
+                            if (!clEmail) throw new Error('CL_EMAIL environment variable required');
+                            await humanType(page, emailField, clEmail, { typoChance: 0 });
+                        }
                     }
 
                     await humanType(page, titleField, publicTitle, { typoChance: 0 });
@@ -678,6 +683,14 @@ async function runListingAutomation(docId, item, db, admin) {
                         log.info('Payment info filled', { platform: 'CL', filledByName: filledCount });
                     }
                 }, { maxRetries: 2, stepName: 'cl_payment', page, captureScreenshot, log });
+
+                // DRY RUN: stop before final submission
+                if (DRY_RUN) {
+                    await captureScreenshot('CL_dry_run_ready', page);
+                    log.info('DRY RUN — stopping before CL submission', { platform: 'CL' });
+                    await updateListing({ 'progress.craigslist': 'success' });
+                    return 'dry_run';
+                }
 
                 await recordPost(db, 'craigslist', WORKER_ID);
                 await recordPosting(db, publicTitle, 'craigslist', docId);
@@ -988,6 +1001,14 @@ async function runListingAutomation(docId, item, db, admin) {
                     if (!publishBtn) {
                         await captureScreenshot('FB_no_publish_btn', page);
                         throw new Error('Publish button not found — listing was not posted');
+                    }
+
+                    // DRY RUN: stop before clicking Publish
+                    if (DRY_RUN) {
+                        await captureScreenshot('FB_dry_run_ready', page);
+                        log.info('DRY RUN — stopping before FB publish click', { platform: 'FB' });
+                        await updateListing({ 'progress.facebook': 'success' });
+                        return 'dry_run';
                     }
 
                     await humanClick(page, publishBtn);

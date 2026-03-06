@@ -197,7 +197,7 @@ export default function AddListingModal({ isOpen, onClose, initialData = null })
             description,
             platform,
             condition,
-            status: 'Pending',
+            status: initialData ? 'Pending' : 'Needs Review',
             imageUrls: finalImageUrls,
             dateListed: initialData?.dateListed || new Date().toLocaleDateString(),
             lastUpdated: new Date()

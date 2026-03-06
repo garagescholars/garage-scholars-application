@@ -12,6 +12,18 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { GS_COLLECTIONS } from "./gs-constants";
 import { sendEmail } from "./gs-notifications";
 
+const ADMIN_EMAILS = ["garagescholars@gmail.com", "admin@garagescholars.com"];
+
+/** Escape HTML to prevent XSS in email templates */
+function escapeHtml(str: string): string {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 const db = getFirestore();
 
 // ─── Email template wrapper (same branding as review campaigns) ───
@@ -299,5 +311,208 @@ export const gsOnDonationReceiptUploaded = onDocumentCreated(
     } catch (err) {
       console.error("Failed to send donation receipt email:", err);
     }
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// Resale Concierge — Email Notifications on Status Changes
+// ═══════════════════════════════════════════════════════════════
+
+export const gsOnResaleStatusChange = onDocumentUpdated(
+  "inventory/{itemId}",
+  async (event) => {
+    const before = event.data?.before.data();
+    const after = event.data?.after.data();
+    if (!before || !after) return;
+
+    const oldStatus = before.status as string;
+    const newStatus = after.status as string;
+    if (oldStatus === newStatus) return;
+
+    // Rate limit: skip if an email was sent for this item in the last 5 minutes
+    const lastEmailAt = after.lastEmailSentAt?.toDate?.() || null;
+    if (lastEmailAt && Date.now() - lastEmailAt.getTime() < 5 * 60 * 1000) {
+      console.log(`Skipping email for ${event.params.itemId} — rate limited (last sent ${lastEmailAt})`);
+      return;
+    }
+
+    const title = escapeHtml(after.title || "Untitled Item");
+    const client = escapeHtml(after.clientName || "Unknown Client");
+    const price = escapeHtml(String(after.price || "0"));
+    const itemId = event.params.itemId;
+
+    // Mark email timestamp to prevent spam
+    await db.collection("inventory").doc(itemId).update({
+      lastEmailSentAt: FieldValue.serverTimestamp(),
+    });
+
+    // ── New listing needs review → notify admins ──
+    if (newStatus === "Needs Review") {
+      // Only allow images from our Firebase Storage bucket
+      const rawImageUrl = (after.imageUrls as string[])?.[0] || "";
+      const imageHtml = rawImageUrl.includes("firebasestorage.googleapis.com")
+        ? `<img src="${escapeHtml(rawImageUrl)}" alt="${title}" style="width: 200px; border-radius: 8px; margin: 12px 0;" />`
+        : "";
+
+      await sendEmail(
+        ADMIN_EMAILS,
+        `New Listing Needs Review: ${title}`,
+        emailWrapper(`
+          <h2 style="color: #0f1b2d; margin: 0 0 8px 0;">New Listing Submitted</h2>
+          <p style="color: #475569;">A new item is waiting for your review before it can be posted to marketplaces.</p>
+
+          ${imageHtml}
+
+          <div style="background: #f1f5f9; border-radius: 8px; padding: 16px; margin: 16px 0;">
+            <p style="margin: 4px 0;"><strong>Item:</strong> ${title}</p>
+            <p style="margin: 4px 0;"><strong>Price:</strong> $${price}</p>
+            <p style="margin: 4px 0;"><strong>Client:</strong> ${client}</p>
+            <p style="margin: 4px 0;"><strong>Platform:</strong> ${after.platform || "Not set"}</p>
+            <p style="margin: 4px 0;"><strong>Condition:</strong> ${after.condition || "Not set"}</p>
+          </div>
+
+          <p style="color: #475569; font-size: 14px;">
+            Log in to the <a href="https://garage-scholars-resale.vercel.app" style="color: #14b8a6; font-weight: 700;">Resale Concierge</a> to review and approve this listing.
+          </p>
+        `)
+      );
+      console.log(`Review notification sent for: ${title}`);
+    }
+
+    // ── Item approved → notify admins of automation start ──
+    if (newStatus === "Pending" && oldStatus === "Needs Review") {
+      await sendEmail(
+        ADMIN_EMAILS,
+        `Listing Approved: ${title} — Automation Starting`,
+        emailWrapper(`
+          <h2 style="color: #0f1b2d; margin: 0 0 8px 0;">Listing Approved</h2>
+          <p style="color: #475569;"><strong>${title}</strong> has been approved and is now queued for marketplace automation.</p>
+
+          <div style="background: #ecfdf5; border-left: 4px solid #10b981; padding: 12px 16px; margin: 16px 0; border-radius: 0 8px 8px 0;">
+            <p style="margin: 0; color: #065f46;">The backend worker will automatically post this item to: <strong>${after.platform || "configured platforms"}</strong></p>
+          </div>
+
+          <div style="background: #f1f5f9; border-radius: 8px; padding: 16px; margin: 16px 0;">
+            <p style="margin: 4px 0;"><strong>Client:</strong> ${client}</p>
+            <p style="margin: 4px 0;"><strong>Price:</strong> $${price}</p>
+          </div>
+        `)
+      );
+      console.log(`Approval notification sent for: ${title}`);
+    }
+
+    // ── Item denied → log (no client email on this collection) ──
+    if (newStatus === "Denied") {
+      await sendEmail(
+        ADMIN_EMAILS,
+        `Listing Denied: ${title}`,
+        emailWrapper(`
+          <h2 style="color: #0f1b2d; margin: 0 0 8px 0;">Listing Denied</h2>
+          <p style="color: #475569;"><strong>${title}</strong> (Client: ${client}) was denied review.</p>
+          <div style="background: #fef2f2; border-left: 4px solid #ef4444; padding: 12px 16px; margin: 16px 0; border-radius: 0 8px 8px 0;">
+            <p style="margin: 0; color: #991b1b;"><strong>Reason:</strong> ${escapeHtml(after.reviewNotes || "No reason provided")}</p>
+          </div>
+        `)
+      );
+      console.log(`Denial notification sent for: ${title}`);
+    }
+
+    // ── Automation error → notify admins ──
+    if ((newStatus === "Error" || newStatus === "Compliance Error") && oldStatus !== "Error" && oldStatus !== "Compliance Error") {
+      const errorMsg = escapeHtml(String(after.lastError?.message || after.lastError || "Unknown error"));
+
+      await sendEmail(
+        ADMIN_EMAILS,
+        `Automation Error: ${title}`,
+        emailWrapper(`
+          <h2 style="color: #0f1b2d; margin: 0 0 8px 0;">Automation Error</h2>
+          <p style="color: #475569;">The automation worker encountered an error while posting <strong>${title}</strong>.</p>
+
+          <div style="background: #fef2f2; border-left: 4px solid #ef4444; padding: 12px 16px; margin: 16px 0; border-radius: 0 8px 8px 0;">
+            <p style="margin: 0; color: #991b1b;"><strong>Error:</strong> ${errorMsg}</p>
+          </div>
+
+          <div style="background: #f1f5f9; border-radius: 8px; padding: 16px; margin: 16px 0;">
+            <p style="margin: 4px 0;"><strong>Client:</strong> ${client}</p>
+            <p style="margin: 4px 0;"><strong>Platform:</strong> ${after.platform || "Not set"}</p>
+            <p style="margin: 4px 0;"><strong>Item ID:</strong> ${itemId}</p>
+          </div>
+
+          <p style="color: #475569; font-size: 14px;">
+            <a href="https://garage-scholars-resale.vercel.app" style="color: #14b8a6; font-weight: 700;">Open Resale Concierge</a> to retry or edit this listing.
+          </p>
+        `)
+      );
+      console.log(`Error notification sent for: ${title}`);
+    }
+
+    // ── Item goes Active → confirmation to admins ──
+    if (newStatus === "Active" && oldStatus !== "Active") {
+      await sendEmail(
+        ADMIN_EMAILS,
+        `Now Live: ${title} — $${price}`,
+        emailWrapper(`
+          <h2 style="color: #0f1b2d; margin: 0 0 8px 0;">Item is Live!</h2>
+          <p style="color: #475569;"><strong>${title}</strong> is now active on the marketplace.</p>
+
+          <div style="background: #ecfdf5; border-left: 4px solid #10b981; padding: 12px 16px; margin: 16px 0; border-radius: 0 8px 8px 0;">
+            <p style="margin: 0; color: #065f46;">Successfully posted to <strong>${after.platform || "marketplace"}</strong> at <strong>$${price}</strong></p>
+          </div>
+
+          <div style="background: #f1f5f9; border-radius: 8px; padding: 16px; margin: 16px 0;">
+            <p style="margin: 4px 0;"><strong>Client:</strong> ${client}</p>
+          </div>
+        `)
+      );
+      console.log(`Active notification sent for: ${title}`);
+    }
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// Resale Concierge — Email on Item Sold (archived to sold_inventory)
+// ═══════════════════════════════════════════════════════════════
+
+export const gsOnItemSold = onDocumentCreated(
+  "sold_inventory/{itemId}",
+  async (event) => {
+    const data = event.data?.data();
+    if (!data) return;
+
+    const title = escapeHtml(data.title || "Untitled Item");
+    const client = escapeHtml(data.clientName || "Unknown Client");
+    const price = escapeHtml(String(data.price || "0"));
+    const salePrice = parseFloat(data.price) || 0;
+    const commission = salePrice * 0.50;
+    const clientShare = salePrice - commission;
+
+    await sendEmail(
+      ADMIN_EMAILS,
+      `SOLD: ${title} for $${price}`,
+      emailWrapper(`
+        <h2 style="color: #0f1b2d; margin: 0 0 8px 0;">Item Sold!</h2>
+        <p style="color: #475569;"><strong>${title}</strong> has been marked as sold.</p>
+
+        <div style="background: #ecfdf5; border-radius: 8px; padding: 16px; margin: 16px 0;">
+          <h3 style="margin: 0 0 12px 0; color: #065f46;">Revenue Breakdown</h3>
+          <table style="width: 100%; font-size: 14px; color: #334155;">
+            <tr><td style="padding: 4px 0;">Sale Price</td><td style="text-align: right; font-weight: 700;">$${salePrice.toFixed(2)}</td></tr>
+            <tr><td style="padding: 4px 0;">Our Commission (50%)</td><td style="text-align: right; font-weight: 700; color: #059669;">$${commission.toFixed(2)}</td></tr>
+            <tr style="border-top: 1px solid #d1d5db;"><td style="padding: 8px 0 4px;">Client Share (${client})</td><td style="text-align: right; font-weight: 700;">$${clientShare.toFixed(2)}</td></tr>
+          </table>
+        </div>
+
+        <div style="background: #f1f5f9; border-radius: 8px; padding: 16px; margin: 16px 0;">
+          <p style="margin: 4px 0;"><strong>Client:</strong> ${client}</p>
+          <p style="margin: 4px 0;"><strong>Platform:</strong> ${data.platform || "Not set"}</p>
+          <p style="margin: 4px 0;"><strong>Date Sold:</strong> ${data.dateSold || new Date().toLocaleDateString()}</p>
+        </div>
+
+        <p style="color: #475569; font-size: 14px;">
+          Remember to <a href="https://garage-scholars-resale.vercel.app" style="color: #14b8a6; font-weight: 700;">record the payout</a> to ${client} when payment is sent.
+        </p>
+      `)
+    );
+    console.log(`Sold notification sent for: ${title} — $${price}`);
   }
 );

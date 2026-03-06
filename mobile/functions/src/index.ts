@@ -61,7 +61,16 @@ export {
   gsOnItemConfirmed,
   gsOnGymPhotosUploaded,
   gsOnDonationReceiptUploaded,
+  gsOnResaleStatusChange,
+  gsOnItemSold,
 } from "./gs-inventory";
+
+// ── Garage Scholars Resale Messaging & Drip functions ──
+export {
+  gsOnConversationCreated,
+  gsOnConversationReply,
+  gsResaleDripNotifications,
+} from "./gs-resale-messaging";
 
 // ── Garage Scholars Hiring Pipeline functions ──
 export {

@@ -51,11 +51,18 @@ service cloud.firestore {
     }
 
     match /inventory/{itemId} {
-      allow read, write: if isSignedIn();
+      allow read: if isSignedIn();
+      allow write: if isAdminByEmail();
+    }
+
+    match /sold_inventory/{itemId} {
+      allow read: if isSignedIn();
+      allow write: if isAdminByEmail();
     }
 
     match /clients/{clientId} {
-      allow read, write: if isSignedIn();
+      allow read: if isSignedIn();
+      allow write: if isAdminByEmail();
     }
 
     match /properties/{propertyId} {
@@ -63,12 +70,27 @@ service cloud.firestore {
     }
 
     match /automationJobs/{jobId} {
-      allow read, write: if isSignedIn();
+      allow read: if isSignedIn();
+      allow create: if isAdminByEmail();
+      allow update: if isAdminByEmail();
     }
 
     match /payouts/{payoutId} {
       allow read: if isSignedIn();
       allow write: if isAdminByEmail();
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Resale Concierge — Conversations (Buyer Inquiries)
+    // ═══════════════════════════════════════════════════════════
+
+    match /conversations/{conversationId} {
+      allow read, write: if isAdminByEmail();
+    }
+
+    match /conversations/{conversationId}/messages/{messageId} {
+      allow read, create: if isAdminByEmail();
+      allow update, delete: if false;
     }
 
     match /signupRequests/{requestId} {

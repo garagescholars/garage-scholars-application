@@ -4,7 +4,9 @@
       "Bash(claude remote-control:*)",
       "Bash(npx expo install expo-linear-gradient)",
       "Bash(gh auth:*)",
-      "Bash(gh api:*)"
+      "Bash(gh api:*)",
+      "Bash(cd \"/Users/tylersodia/Desktop/Garage Scholars/mobile/functions\" && npm run build 2>&1)",
+      "Bash(cd \"/Users/tylersodia/Desktop/Garage Scholars/Website\" && node build.js 2>&1)"
     ]
   }
 }
