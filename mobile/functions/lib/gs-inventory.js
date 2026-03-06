@@ -316,7 +316,7 @@ exports.gsOnResaleStatusChange = (0, firestore_1.onDocumentUpdated)("inventory/{
           </div>
 
           <p style="color: #475569; font-size: 14px;">
-            Log in to the <a href="https://garage-scholars-resale.vercel.app" style="color: #14b8a6; font-weight: 700;">Resale Concierge</a> to review and approve this listing.
+            Log in to the <a href="https://garage-scholars-optimized.vercel.app" style="color: #14b8a6; font-weight: 700;">Resale Concierge</a> to review and approve this listing.
           </p>
         `));
         console.log(`Review notification sent for: ${title}`);
@@ -367,7 +367,7 @@ exports.gsOnResaleStatusChange = (0, firestore_1.onDocumentUpdated)("inventory/{
           </div>
 
           <p style="color: #475569; font-size: 14px;">
-            <a href="https://garage-scholars-resale.vercel.app" style="color: #14b8a6; font-weight: 700;">Open Resale Concierge</a> to retry or edit this listing.
+            <a href="https://garage-scholars-optimized.vercel.app" style="color: #14b8a6; font-weight: 700;">Open Resale Concierge</a> to retry or edit this listing.
           </p>
         `));
         console.log(`Error notification sent for: ${title}`);
@@ -422,7 +422,7 @@ exports.gsOnItemSold = (0, firestore_1.onDocumentCreated)("sold_inventory/{itemI
         </div>
 
         <p style="color: #475569; font-size: 14px;">
-          Remember to <a href="https://garage-scholars-resale.vercel.app" style="color: #14b8a6; font-weight: 700;">record the payout</a> to ${client} when payment is sent.
+          Remember to <a href="https://garage-scholars-optimized.vercel.app" style="color: #14b8a6; font-weight: 700;">record the payout</a> to ${client} when payment is sent.
         </p>
       `));
     console.log(`Sold notification sent for: ${title} — $${price}`);

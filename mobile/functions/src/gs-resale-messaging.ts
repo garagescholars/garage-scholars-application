@@ -94,7 +94,7 @@ export const gsOnConversationCreated = onDocumentCreated(
         ` : ""}
 
         <p style="color: #475569; font-size: 14px;">
-          <a href="https://garage-scholars-resale.vercel.app" style="color: #14b8a6; font-weight: 700;">Open Resale Concierge</a> to view and respond.
+          <a href="https://garage-scholars-optimized.vercel.app" style="color: #14b8a6; font-weight: 700;">Open Resale Concierge</a> to view and respond.
         </p>
       `)
     );
@@ -150,7 +150,7 @@ export const gsOnConversationReply = onDocumentCreated(
         </div>
 
         <p style="color: #475569; font-size: 14px;">
-          <a href="https://garage-scholars-resale.vercel.app" style="color: #14b8a6; font-weight: 700;">Open Resale Concierge</a> to reply.
+          <a href="https://garage-scholars-optimized.vercel.app" style="color: #14b8a6; font-weight: 700;">Open Resale Concierge</a> to reply.
         </p>
       `)
     );
@@ -298,7 +298,7 @@ export const gsResaleDripNotifications = onSchedule(
         </table>
 
         <p style="color: #475569; font-size: 14px;">
-          <a href="https://garage-scholars-resale.vercel.app" style="color: #14b8a6; font-weight: 700;">Open Resale Concierge</a> to take action.
+          <a href="https://garage-scholars-optimized.vercel.app" style="color: #14b8a6; font-weight: 700;">Open Resale Concierge</a> to take action.
         </p>
       `)
     );

@@ -83,7 +83,7 @@ exports.gsOnConversationCreated = (0, firestore_1.onDocumentCreated)("conversati
         ` : ""}
 
         <p style="color: #475569; font-size: 14px;">
-          <a href="https://garage-scholars-resale.vercel.app" style="color: #14b8a6; font-weight: 700;">Open Resale Concierge</a> to view and respond.
+          <a href="https://garage-scholars-optimized.vercel.app" style="color: #14b8a6; font-weight: 700;">Open Resale Concierge</a> to view and respond.
         </p>
       `));
     console.log(`New conversation email sent: ${data.buyerName} — ${data.itemTitle}`);
@@ -127,7 +127,7 @@ exports.gsOnConversationReply = (0, firestore_1.onDocumentCreated)("conversation
         </div>
 
         <p style="color: #475569; font-size: 14px;">
-          <a href="https://garage-scholars-resale.vercel.app" style="color: #14b8a6; font-weight: 700;">Open Resale Concierge</a> to reply.
+          <a href="https://garage-scholars-optimized.vercel.app" style="color: #14b8a6; font-weight: 700;">Open Resale Concierge</a> to reply.
         </p>
       `));
     console.log(`Reply email sent for conversation ${conversationId}`);
@@ -251,7 +251,7 @@ exports.gsResaleDripNotifications = (0, scheduler_1.onSchedule)({
         </table>
 
         <p style="color: #475569; font-size: 14px;">
-          <a href="https://garage-scholars-resale.vercel.app" style="color: #14b8a6; font-weight: 700;">Open Resale Concierge</a> to take action.
+          <a href="https://garage-scholars-optimized.vercel.app" style="color: #14b8a6; font-weight: 700;">Open Resale Concierge</a> to take action.
         </p>
       `));
     console.log(`Drip digest sent with ${dripItems.length} items.`);
