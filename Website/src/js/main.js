@@ -125,6 +125,14 @@ async function handleQuoteSubmit(e) {
     btn.disabled = true;
     btn.textContent = 'Submitting...';
 
+    // Global safety timeout — 90 seconds max for entire submission
+    var globalTimeout = setTimeout(function() {
+        msg.textContent = 'Submission is taking too long. Please refresh the page and try again.';
+        msg.className = 'form-message error';
+        btn.disabled = false;
+        btn.textContent = 'Submit Quote Request';
+    }, 90000);
+
     try {
         var fd = new FormData(this);
         var data = {
@@ -144,6 +152,7 @@ async function handleQuoteSubmit(e) {
 
         var photos = fd.getAll('photos').filter(function(f) { return f.size > 0; });
         if (!photos || photos.length < 3) {
+            clearTimeout(globalTimeout);
             msg.textContent = 'Please upload at least 3 photos of your garage.';
             msg.className = 'form-message error';
             btn.disabled = false;
@@ -156,13 +165,28 @@ async function handleQuoteSubmit(e) {
 
         for (var j = 0; j < photos.length; j++) {
             msg.textContent = 'Processing photo ' + (j + 1) + ' of ' + photos.length + '...';
-            var base64 = await resizePhoto(photos[j], 1200, 0.7);
-            data.photoData.push({ base64: base64, filename: photos[j].name, mimeType: 'image/jpeg' });
+            try {
+                var base64 = await resizePhoto(photos[j], 1200, 0.7);
+                data.photoData.push({ base64: base64, filename: photos[j].name, mimeType: 'image/jpeg' });
+            } catch (photoErr) {
+                console.warn('Photo processing failed for ' + photos[j].name + ':', photoErr.message);
+                // Skip failed photos but continue — as long as we get at least 3
+                continue;
+            }
+        }
+
+        if (data.photoData.length < 3) {
+            clearTimeout(globalTimeout);
+            msg.textContent = 'Could not process enough photos. Please use JPG or PNG format and try again. (' + data.photoData.length + ' of ' + photos.length + ' processed)';
+            msg.className = 'form-message error';
+            btn.disabled = false;
+            btn.textContent = 'Submit Quote Request';
+            return;
         }
 
         msg.textContent = 'Submitting your request...';
         var functions = firebase.functions();
-        var submitQuoteRequest = functions.httpsCallable('submitQuoteRequest');
+        var submitQuoteRequest = functions.httpsCallable('submitQuoteRequest', { timeout: 60000 });
 
         // Retry once on transient network errors
         try {
@@ -176,11 +200,13 @@ async function handleQuoteSubmit(e) {
             }
         }
 
+        clearTimeout(globalTimeout);
         msg.textContent = "Thank you! Your quote request has been submitted. We'll contact you within 24 hours.";
         msg.className = 'form-message success';
         setTimeout(function() { closeQuoteModal(); }, 4000);
 
     } catch (error) {
+        clearTimeout(globalTimeout);
         console.error('Quote submission error:', error);
         var errMsg = 'There was an error submitting your request. Please try again.';
         if (error.code === 'functions/invalid-argument') {

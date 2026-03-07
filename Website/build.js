@@ -86,8 +86,9 @@ function buildScripts(config) {
     scripts += '    <script src="/firebase-config.js"></script>\n';
   }
 
-  // Always include shared JS
-  scripts += '    <script src="/js/main.js"></script>\n';
+  // Always include shared JS (cache-bust with build timestamp)
+  const cacheBust = Date.now();
+  scripts += `    <script src="/js/main.js?v=${cacheBust}"></script>\n`;
 
   return scripts;
 }
