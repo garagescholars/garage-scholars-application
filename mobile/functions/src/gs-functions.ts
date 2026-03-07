@@ -88,7 +88,7 @@ async function commitInChunks(
 // 1. FIRESTORE TRIGGER: gs_jobs status changes
 // ═══════════════════════════════════════════════════════════════
 export const gsOnJobUpdated = onDocumentWritten(
-  `${GS_COLLECTIONS.JOBS}/{jobId}`,
+  { document: `${GS_COLLECTIONS.JOBS}/{jobId}`, secrets: ["STRIPE_SECRET_KEY"] },
   async (event) => {
     const before = event.data?.before?.data();
     const after = event.data?.after?.data();
@@ -477,6 +477,108 @@ export const gsOnJobUpdated = onDocumentWritten(
         }
       } catch (err) {
         console.error("Review campaign queue failed:", err);
+      }
+
+      // ── Auto-send balance invoice if deposit was paid (50/50 split) ──
+      try {
+        if (
+          after.clientPaymentType === "split_50_50" &&
+          after.clientPaymentStatus === "deposit_paid" &&
+          !after.balanceInvoiceId &&
+          after.stripeCustomerId &&
+          after.clientPrice > 0
+        ) {
+          const { getFirestore: gf, FieldValue: FV } = await import("firebase-admin/firestore");
+          const { CLIENT_BALANCE_PERCENT } = await import("./gs-constants");
+
+          const fullAmount = after.clientPrice;
+          const balanceAmount = Math.round(fullAmount * (CLIENT_BALANCE_PERCENT / 100) * 100) / 100;
+          const balanceCents = Math.round(balanceAmount * 100);
+          const desc = after.title || `${after.serviceType || "Service"} Package`;
+
+          // Lazy-load Stripe
+          const Stripe = require("stripe");
+          const stripeKey = process.env.STRIPE_SECRET_KEY?.trim();
+          if (stripeKey) {
+            const stripe = new Stripe(stripeKey);
+
+            // Create invoice
+            const invoice = await stripe.invoices.create({
+              customer: after.stripeCustomerId,
+              collection_method: "send_invoice",
+              days_until_due: 3,
+              description: `Garage Scholars — ${desc} — Balance Due`,
+              metadata: {
+                jobId,
+                splitType: "balance_50",
+                packageTier: after.package || "",
+                platform: "garage_scholars",
+              },
+            });
+
+            await stripe.invoiceItems.create({
+              customer: after.stripeCustomerId,
+              invoice: invoice.id,
+              amount: balanceCents,
+              currency: "usd",
+              description: `${desc} — Balance (50%)`,
+            });
+
+            const finalized = await stripe.invoices.finalizeInvoice(invoice.id);
+            await stripe.invoices.sendInvoice(invoice.id);
+
+            // Record payment
+            await db.collection("gs_customerPayments").add({
+              customerId: after.stripeCustomerId,
+              customerName: after.clientName,
+              customerEmail: after.clientEmail,
+              jobId,
+              amount: balanceAmount,
+              fullJobAmount: fullAmount,
+              type: "invoice",
+              splitType: "balance_50",
+              stripeInvoiceId: invoice.id,
+              stripePaymentIntentId: finalized.payment_intent || null,
+              paymentMethod: "invoice",
+              convenienceFee: 0,
+              totalCharged: balanceAmount,
+              status: "pending",
+              description: `${desc} — Balance (50%)`,
+              invoiceUrl: finalized.hosted_invoice_url || null,
+              invoicePdf: finalized.invoice_pdf || null,
+              createdAt: FV.serverTimestamp(),
+            });
+
+            // Update job
+            await db.collection("gs_jobs").doc(jobId).update({
+              balanceInvoiceId: invoice.id,
+              clientPaymentStatus: "pending_balance",
+              updatedAt: FV.serverTimestamp(),
+            });
+
+            // Notify admin
+            await db.collection("mail").add({
+              to: ["garagescholars@gmail.com"],
+              message: {
+                subject: `Balance Invoice Auto-Sent: ${after.clientName} — $${balanceAmount.toFixed(2)}`,
+                html: `<h2>Balance Invoice Auto-Sent</h2>
+                  <p><strong>Client:</strong> ${after.clientName} (${after.clientEmail})</p>
+                  <p><strong>Balance:</strong> $${balanceAmount.toFixed(2)}</p>
+                  <p><strong>Job:</strong> ${desc}</p>
+                  <p><strong>Invoice:</strong> ${invoice.id}</p>
+                  <p>This was automatically triggered by the job being marked as completed.</p>`,
+              },
+              createdAt: FV.serverTimestamp(),
+            });
+
+            console.log(`[gsOnJobUpdated] Balance invoice ${invoice.id} auto-sent for job ${jobId}`);
+          } else {
+            console.error(`[gsOnJobUpdated] STRIPE_SECRET_KEY not available for balance invoice on job ${jobId}`);
+          }
+        }
+      } catch (err) {
+        console.error(`[gsOnJobUpdated] Failed to auto-send balance invoice for job ${jobId}:`, err);
+        // Don't throw — this is a best-effort trigger. The safety-net scheduler will catch it.
       }
     }
   }

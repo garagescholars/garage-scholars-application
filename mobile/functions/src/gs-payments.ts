@@ -24,6 +24,8 @@ import {
   GS_PACKAGES,
   STRIPE_PRICE_IDS,
   GsPackageKey,
+  CLIENT_DEPOSIT_PERCENT,
+  CLIENT_BALANCE_PERCENT,
 } from "./gs-constants";
 import { sendMercuryPayout } from "./gs-mercury";
 
@@ -36,7 +38,7 @@ function getStripe(): any {
   if (!_stripe) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const Stripe = require("stripe");
-    const key = process.env.STRIPE_SECRET_KEY;
+    const key = process.env.STRIPE_SECRET_KEY?.trim();
     if (!key) throw new Error("STRIPE_SECRET_KEY not configured");
     _stripe = new Stripe(key);
   }
@@ -618,7 +620,69 @@ export const gsStripeWebhook = onRequest(
 
       case "invoice.paid": {
         const invoice = event.data.object as any;
-        // Record recurring payment
+        const invoiceSplitType = invoice.metadata?.splitType;
+        const invoiceJobId = invoice.metadata?.jobId;
+
+        // ── Handle split payment invoices (deposit or balance) ──
+        if (invoiceJobId && (invoiceSplitType === "deposit_50" || invoiceSplitType === "balance_50" || invoiceSplitType === "full")) {
+          // Update the gs_customerPayments record
+          const cpSnap = await db
+            .collection(GS_COLLECTIONS.CUSTOMER_PAYMENTS)
+            .where("stripeInvoiceId", "==", invoice.id)
+            .limit(1)
+            .get();
+          if (!cpSnap.empty) {
+            await cpSnap.docs[0].ref.update({
+              status: "succeeded",
+              paidAt: FieldValue.serverTimestamp(),
+            });
+          }
+
+          // Update the job's payment status
+          const jobRef = db.collection(GS_COLLECTIONS.JOBS).doc(invoiceJobId);
+          const jobSnap = await jobRef.get();
+          if (jobSnap.exists) {
+            const job = jobSnap.data()!;
+            if (invoiceSplitType === "deposit_50") {
+              await jobRef.update({
+                clientPaymentStatus: "deposit_paid",
+                depositPaidAt: FieldValue.serverTimestamp(),
+                updatedAt: FieldValue.serverTimestamp(),
+              });
+              console.log(`[webhook] Deposit paid for job ${invoiceJobId}`);
+
+              // Notify admin
+              await notifyAdmins(
+                `Deposit Received: ${job.clientName} — $${(invoice.amount_paid / 100).toFixed(2)}`,
+                `<p><strong>${job.clientName}</strong> paid the 50% deposit ($${(invoice.amount_paid / 100).toFixed(2)}).</p>
+                 <p>The balance invoice will be auto-sent when the job is marked as completed.</p>`
+              );
+            } else if (invoiceSplitType === "balance_50") {
+              await jobRef.update({
+                clientPaymentStatus: "fully_paid",
+                balancePaidAt: FieldValue.serverTimestamp(),
+                updatedAt: FieldValue.serverTimestamp(),
+              });
+              console.log(`[webhook] Balance paid for job ${invoiceJobId} — FULLY PAID`);
+
+              await notifyAdmins(
+                `FULLY PAID: ${job.clientName} — $${(job.clientPrice || 0).toFixed(2)}`,
+                `<p><strong>${job.clientName}</strong> paid the balance. Job is now fully paid.</p>
+                 <p><strong>Total collected:</strong> $${(job.clientPrice || 0).toFixed(2)}</p>`
+              );
+            } else if (invoiceSplitType === "full") {
+              await jobRef.update({
+                clientPaymentStatus: "fully_paid",
+                depositPaidAt: FieldValue.serverTimestamp(),
+                balancePaidAt: FieldValue.serverTimestamp(),
+                updatedAt: FieldValue.serverTimestamp(),
+              });
+              console.log(`[webhook] Full payment received for job ${invoiceJobId}`);
+            }
+          }
+        }
+
+        // ── Handle recurring subscription invoices ──
         if (invoice.subscription) {
           const cpSnap = await db
             .collection(GS_COLLECTIONS.CUSTOMER_PAYMENTS)
@@ -626,7 +690,6 @@ export const gsStripeWebhook = onRequest(
             .limit(1)
             .get();
           if (!cpSnap.empty) {
-            // Add new payment record for this invoice
             await db.collection(GS_COLLECTIONS.CUSTOMER_PAYMENTS).add({
               customerId: cpSnap.docs[0].data().customerId,
               customerName: cpSnap.docs[0].data().customerName,
@@ -1406,6 +1469,68 @@ export const gsExportPaymentData = onCall(
 // ═══════════════════════════════════════════════════════════════
 // 12. CALLABLE: Create & send Stripe invoice to customer via email
 // ═══════════════════════════════════════════════════════════════
+// ── Shared helper: find or create Stripe customer ──
+async function findOrCreateStripeCustomer(
+  stripe: any,
+  customerEmail: string,
+  customerName: string
+): Promise<any> {
+  const existing = await stripe.customers.list({ email: customerEmail, limit: 1 });
+  if (existing.data.length > 0) {
+    const c = existing.data[0];
+    if (c.name !== customerName) {
+      return stripe.customers.update(c.id, { name: customerName });
+    }
+    return c;
+  }
+  return stripe.customers.create({
+    email: customerEmail,
+    name: customerName,
+    metadata: { platform: "garage_scholars" },
+  });
+}
+
+// ── Shared helper: create, finalize, and send a Stripe invoice ──
+async function createAndSendStripeInvoice(
+  stripe: any,
+  opts: {
+    customerId: string;
+    amountCents: number;
+    lineDescription: string;
+    invoiceDescription: string;
+    jobId: string;
+    splitType: "deposit_50" | "balance_50" | "full";
+    packageTier: string;
+    daysUntilDue?: number;
+  }
+) {
+  const invoice = await stripe.invoices.create({
+    customer: opts.customerId,
+    collection_method: "send_invoice",
+    days_until_due: opts.daysUntilDue ?? 3,
+    description: opts.invoiceDescription,
+    metadata: {
+      jobId: opts.jobId,
+      splitType: opts.splitType,
+      packageTier: opts.packageTier,
+      platform: "garage_scholars",
+    },
+  });
+
+  await stripe.invoiceItems.create({
+    customer: opts.customerId,
+    invoice: invoice.id,
+    amount: opts.amountCents,
+    currency: "usd",
+    description: opts.lineDescription,
+  });
+
+  const finalized = await stripe.invoices.finalizeInvoice(invoice.id);
+  await stripe.invoices.sendInvoice(invoice.id);
+
+  return { invoice, finalized };
+}
+
 export const gsCreateInvoice = onCall(
   { cors: true, timeoutSeconds: 30, secrets: ["STRIPE_SECRET_KEY"] },
   async (request) => {
@@ -1413,7 +1538,6 @@ export const gsCreateInvoice = onCall(
       throw new HttpsError("unauthenticated", "Authentication required.");
     }
 
-    // Verify admin
     const profileSnap = await db.collection(GS_COLLECTIONS.PROFILES).doc(request.auth.uid).get();
     if (!profileSnap.exists || profileSnap.data()?.role !== "admin") {
       throw new HttpsError("permission-denied", "Admin role required.");
@@ -1427,7 +1551,7 @@ export const gsCreateInvoice = onCall(
       description,
       jobId,
       packageTier,
-      lineItems,
+      splitType = "deposit_50",
     } = request.data as {
       customerName: string;
       customerEmail: string;
@@ -1436,149 +1560,331 @@ export const gsCreateInvoice = onCall(
       description?: string;
       jobId?: string;
       packageTier?: string;
-      lineItems?: Array<{ name: string; amount: number }>;
+      splitType?: "deposit_50" | "full";
     };
 
-    if (!customerName || !customerEmail) {
-      throw new HttpsError("invalid-argument", "customerName and customerEmail are required.");
+    if (!customerName || !customerEmail || !amount) {
+      throw new HttpsError("invalid-argument", "customerName, customerEmail, and amount are required.");
     }
-    if (!packageKey && !amount && (!lineItems || lineItems.length === 0)) {
-      throw new HttpsError("invalid-argument", "Either packageKey, amount, or lineItems is required.");
-    }
-
-    // Resolve package details from packageKey
-    let resolvedAmount = amount;
-    let resolvedDescription = description;
-    let resolvedPackageTier = packageTier;
-    let resolvedPriceId: string | null = null;
-
-    if (packageKey) {
-      const pkg = GS_PACKAGES[packageKey];
-      if (!pkg) throw new HttpsError("invalid-argument", `Unknown packageKey: ${packageKey}`);
-      resolvedAmount = resolvedAmount ?? pkg.price;
-      resolvedDescription = resolvedDescription ?? `Garage Scholars — ${pkg.name}`;
-      resolvedPackageTier = resolvedPackageTier ?? pkg.name;
-      resolvedPriceId = STRIPE_PRICE_IDS[packageKey] || null;
+    if (!jobId) {
+      throw new HttpsError("invalid-argument", "jobId is required for invoice tracking.");
     }
 
-    if (!resolvedAmount && (!lineItems || lineItems.length === 0)) {
-      throw new HttpsError("invalid-argument", "Could not determine invoice amount.");
+    // Idempotency guard: prevent sending duplicate deposit invoices
+    if (splitType === "deposit_50") {
+      const jobSnap = await db.collection(GS_COLLECTIONS.JOBS).doc(jobId).get();
+      if (jobSnap.exists && jobSnap.data()?.depositInvoiceId) {
+        throw new HttpsError("already-exists", "A deposit invoice has already been sent for this job.");
+      }
     }
 
     const stripe = getStripe();
+    const stripeCustomer = await findOrCreateStripeCustomer(stripe, customerEmail, customerName);
 
-    // Find or create Stripe Customer
-    let stripeCustomer: any;
-    const existingCustomers = await stripe.customers.list({
-      email: customerEmail,
-      limit: 1,
-    });
-    if (existingCustomers.data.length > 0) {
-      stripeCustomer = existingCustomers.data[0];
-      // Update name if needed
-      if (stripeCustomer.name !== customerName) {
-        stripeCustomer = await stripe.customers.update(stripeCustomer.id, {
-          name: customerName,
-        });
-      }
-    } else {
-      stripeCustomer = await stripe.customers.create({
-        email: customerEmail,
-        name: customerName,
-        metadata: { platform: "garage_scholars" },
-      });
-    }
+    const isDeposit = splitType === "deposit_50";
+    const invoiceAmount = isDeposit
+      ? Math.round(amount * (CLIENT_DEPOSIT_PERCENT / 100) * 100) / 100
+      : amount;
+    const invoiceAmountCents = Math.round(invoiceAmount * 100);
+    const label = isDeposit ? "Deposit (50%)" : "Full Payment";
+    const desc = description || `${packageTier || "Service"} Package`;
 
-    // Create Stripe Invoice
-    const invoice = await stripe.invoices.create({
-      customer: stripeCustomer.id,
-      collection_method: "send_invoice",
-      days_until_due: 3,
-      description: resolvedDescription || `Garage Scholars — ${resolvedPackageTier || "Service"} Package`,
-      metadata: {
-        jobId: jobId || "",
-        packageKey: packageKey || "",
-        packageTier: resolvedPackageTier || "",
-        platform: "garage_scholars",
-      },
+    const { invoice, finalized } = await createAndSendStripeInvoice(stripe, {
+      customerId: stripeCustomer.id,
+      amountCents: invoiceAmountCents,
+      lineDescription: `${desc} — ${label}`,
+      invoiceDescription: `Garage Scholars — ${desc} — ${label}`,
+      jobId,
+      splitType: isDeposit ? "deposit_50" : "full",
+      packageTier: packageTier || "",
     });
 
-    // Add line items
-    if (lineItems && lineItems.length > 0) {
-      for (const item of lineItems) {
-        await stripe.invoiceItems.create({
-          customer: stripeCustomer.id,
-          invoice: invoice.id,
-          amount: Math.round(item.amount * 100),
-          currency: "usd",
-          description: item.name,
-        });
-      }
-    } else if (resolvedPriceId) {
-      // Use pre-created Stripe price for clean dashboard reporting
-      await stripe.invoiceItems.create({
-        customer: stripeCustomer.id,
-        invoice: invoice.id,
-        price: resolvedPriceId,
-      });
-    } else {
-      await stripe.invoiceItems.create({
-        customer: stripeCustomer.id,
-        invoice: invoice.id,
-        amount: Math.round(resolvedAmount! * 100),
-        currency: "usd",
-        description: resolvedDescription || `${resolvedPackageTier || "Service"} Package`,
-      });
-    }
-
-    // Finalize and send the invoice — Stripe emails the customer automatically
-    const finalizedInvoice = await stripe.invoices.finalizeInvoice(invoice.id);
-    await stripe.invoices.sendInvoice(invoice.id);
-
-    // Record in Firestore
+    // Record in gs_customerPayments
     await db.collection(GS_COLLECTIONS.CUSTOMER_PAYMENTS).add({
       customerId: stripeCustomer.id,
       customerName,
       customerEmail,
-      jobId: jobId || null,
-      packageKey: packageKey || null,
-      amount: resolvedAmount,
+      jobId,
+      amount: invoiceAmount,
+      fullJobAmount: amount,
       type: "invoice",
+      splitType: isDeposit ? "deposit_50" : "full",
       stripeInvoiceId: invoice.id,
-      stripePaymentIntentId: finalizedInvoice.payment_intent || null,
+      stripePaymentIntentId: finalized.payment_intent || null,
       paymentMethod: "invoice",
       convenienceFee: 0,
-      totalCharged: resolvedAmount,
+      totalCharged: invoiceAmount,
       status: "pending",
-      description: resolvedDescription || `${resolvedPackageTier || "Service"} Package`,
-      invoiceUrl: finalizedInvoice.hosted_invoice_url || null,
-      invoicePdf: finalizedInvoice.invoice_pdf || null,
+      description: `${desc} — ${label}`,
+      invoiceUrl: finalized.hosted_invoice_url || null,
+      invoicePdf: finalized.invoice_pdf || null,
       createdAt: FieldValue.serverTimestamp(),
     });
 
-    // Also send a confirmation email via our own mail system
+    // Update job with invoice tracking fields
+    const jobUpdate: Record<string, any> = {
+      stripeCustomerId: stripeCustomer.id,
+      clientPaymentType: isDeposit ? "split_50_50" : "full",
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+    if (isDeposit) {
+      jobUpdate.depositInvoiceId = invoice.id;
+      jobUpdate.clientPaymentStatus = "pending_deposit";
+    } else {
+      jobUpdate.clientPaymentStatus = "pending_full";
+    }
+    await db.collection(GS_COLLECTIONS.JOBS).doc(jobId).update(jobUpdate);
+
+    // Admin confirmation email
     await db.collection("mail").add({
       to: ["garagescholars@gmail.com"],
       message: {
-        subject: `Invoice Sent: ${customerName} — $${resolvedAmount!.toFixed(2)}`,
-        html: `<h2>Invoice Sent</h2>
+        subject: `${label} Invoice Sent: ${customerName} — $${invoiceAmount.toFixed(2)}`,
+        html: `<h2>${label} Invoice Sent</h2>
           <p><strong>Client:</strong> ${customerName}</p>
           <p><strong>Email:</strong> ${customerEmail}</p>
-          <p><strong>Amount:</strong> $${resolvedAmount!.toFixed(2)}</p>
-          <p><strong>Package:</strong> ${resolvedPackageTier || "N/A"}</p>
+          <p><strong>Amount:</strong> $${invoiceAmount.toFixed(2)} (of $${amount.toFixed(2)} total)</p>
+          <p><strong>Package:</strong> ${packageTier || "N/A"}</p>
           <p><strong>Stripe Invoice:</strong> ${invoice.id}</p>
-          <p>The client will receive a Stripe-hosted payment link via email.</p>`,
+          ${isDeposit ? "<p>The balance invoice ($" + (amount - invoiceAmount).toFixed(2) + ") will be auto-sent when the job is completed.</p>" : ""}`,
       },
       createdAt: FieldValue.serverTimestamp(),
     });
 
-    console.log(`Invoice ${invoice.id} created and sent to ${customerEmail} for $${resolvedAmount}`);
+    console.log(`[gsCreateInvoice] ${label} invoice ${invoice.id} sent to ${customerEmail} for $${invoiceAmount} (job: ${jobId})`);
 
     return {
       invoiceId: invoice.id,
-      invoiceUrl: finalizedInvoice.hosted_invoice_url,
-      invoicePdf: finalizedInvoice.invoice_pdf,
-      status: finalizedInvoice.status,
+      invoiceUrl: finalized.hosted_invoice_url,
+      invoicePdf: finalized.invoice_pdf,
+      status: finalized.status,
+      splitType: isDeposit ? "deposit_50" : "full",
+      invoiceAmount,
     };
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// 13. Balance Invoice — auto-sent when job reaches COMPLETED
+// ═══════════════════════════════════════════════════════════════
+export const gsCreateBalanceInvoice = onCall(
+  { cors: true, timeoutSeconds: 30, secrets: ["STRIPE_SECRET_KEY"] },
+  async (request) => {
+    // Can be called by admin manually OR by internal trigger (server-to-server)
+    const { jobId } = request.data as { jobId: string };
+    if (!jobId) {
+      throw new HttpsError("invalid-argument", "jobId is required.");
+    }
+
+    const jobSnap = await db.collection(GS_COLLECTIONS.JOBS).doc(jobId).get();
+    if (!jobSnap.exists) {
+      throw new HttpsError("not-found", "Job not found.");
+    }
+    const job = jobSnap.data()!;
+
+    // Guard: only send balance for split_50_50 jobs where deposit was paid
+    if (job.clientPaymentType !== "split_50_50") {
+      throw new HttpsError("failed-precondition", "Job is not a split payment job.");
+    }
+    if (job.clientPaymentStatus !== "deposit_paid") {
+      throw new HttpsError("failed-precondition", `Cannot send balance invoice — current status is "${job.clientPaymentStatus}". Deposit must be paid first.`);
+    }
+    // Idempotency: don't send balance twice
+    if (job.balanceInvoiceId) {
+      console.log(`[gsCreateBalanceInvoice] Balance already sent for job ${jobId}: ${job.balanceInvoiceId}`);
+      return { invoiceId: job.balanceInvoiceId, alreadySent: true };
+    }
+
+    const stripe = getStripe();
+
+    // Use the Stripe customer already stored on the job
+    const customerId = job.stripeCustomerId;
+    if (!customerId) {
+      throw new HttpsError("failed-precondition", "No Stripe customer ID on job. Was the deposit invoice sent?");
+    }
+
+    const fullAmount = job.clientPrice;
+    const balanceAmount = Math.round(fullAmount * (CLIENT_BALANCE_PERCENT / 100) * 100) / 100;
+    const balanceCents = Math.round(balanceAmount * 100);
+    const desc = job.title || `${job.serviceType || "Service"} Package`;
+
+    const { invoice, finalized } = await createAndSendStripeInvoice(stripe, {
+      customerId,
+      amountCents: balanceCents,
+      lineDescription: `${desc} — Balance (50%)`,
+      invoiceDescription: `Garage Scholars — ${desc} — Balance Due`,
+      jobId,
+      splitType: "balance_50",
+      packageTier: job.package || "",
+    });
+
+    // Record payment
+    await db.collection(GS_COLLECTIONS.CUSTOMER_PAYMENTS).add({
+      customerId,
+      customerName: job.clientName,
+      customerEmail: job.clientEmail,
+      jobId,
+      amount: balanceAmount,
+      fullJobAmount: fullAmount,
+      type: "invoice",
+      splitType: "balance_50",
+      stripeInvoiceId: invoice.id,
+      stripePaymentIntentId: finalized.payment_intent || null,
+      paymentMethod: "invoice",
+      convenienceFee: 0,
+      totalCharged: balanceAmount,
+      status: "pending",
+      description: `${desc} — Balance (50%)`,
+      invoiceUrl: finalized.hosted_invoice_url || null,
+      invoicePdf: finalized.invoice_pdf || null,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+
+    // Update job
+    await db.collection(GS_COLLECTIONS.JOBS).doc(jobId).update({
+      balanceInvoiceId: invoice.id,
+      clientPaymentStatus: "pending_balance",
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    // Notify admins
+    await db.collection("mail").add({
+      to: ["garagescholars@gmail.com"],
+      message: {
+        subject: `Balance Invoice Sent: ${job.clientName} — $${balanceAmount.toFixed(2)}`,
+        html: `<h2>Balance Invoice Auto-Sent</h2>
+          <p><strong>Client:</strong> ${job.clientName}</p>
+          <p><strong>Email:</strong> ${job.clientEmail}</p>
+          <p><strong>Balance Due:</strong> $${balanceAmount.toFixed(2)}</p>
+          <p><strong>Job:</strong> ${desc}</p>
+          <p><strong>Stripe Invoice:</strong> ${invoice.id}</p>
+          <p>This balance invoice was automatically sent because the job was marked as completed.</p>`,
+      },
+      createdAt: FieldValue.serverTimestamp(),
+    });
+
+    console.log(`[gsCreateBalanceInvoice] Balance invoice ${invoice.id} sent to ${job.clientEmail} for $${balanceAmount} (job: ${jobId})`);
+
+    return {
+      invoiceId: invoice.id,
+      invoiceUrl: finalized.hosted_invoice_url,
+      invoicePdf: finalized.invoice_pdf,
+      status: finalized.status,
+      balanceAmount,
+    };
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// 14. Safety Net — scheduled check for missed balance invoices
+//     Runs every 6 hours. Catches any job that reached COMPLETED
+//     with deposit_paid status but no balance invoice sent.
+// ═══════════════════════════════════════════════════════════════
+export const gsCheckMissedBalanceInvoices = onSchedule(
+  { schedule: "every 6 hours", timeoutSeconds: 120, secrets: ["STRIPE_SECRET_KEY"] },
+  async () => {
+    console.log("[gsCheckMissedBalanceInvoices] Running safety-net check...");
+
+    // Find split_50_50 jobs where deposit is paid but no balance invoice sent
+    const missedSnap = await db.collection(GS_COLLECTIONS.JOBS)
+      .where("clientPaymentType", "==", "split_50_50")
+      .where("clientPaymentStatus", "==", "deposit_paid")
+      .get();
+
+    let sent = 0;
+    for (const doc of missedSnap.docs) {
+      const job = doc.data();
+      // Only send balance if job is actually completed (or past REVIEW_PENDING)
+      const completedStatuses = ["COMPLETED", "REVIEW_PENDING"];
+      if (!completedStatuses.includes(job.status)) continue;
+      // Skip if balance already sent (double-check)
+      if (job.balanceInvoiceId) continue;
+
+      try {
+        const stripe = getStripe();
+        const customerId = job.stripeCustomerId;
+        if (!customerId) {
+          console.warn(`[gsCheckMissedBalanceInvoices] Job ${doc.id} has no stripeCustomerId, skipping`);
+          continue;
+        }
+
+        const fullAmount = job.clientPrice;
+        const balanceAmount = Math.round(fullAmount * (CLIENT_BALANCE_PERCENT / 100) * 100) / 100;
+        const balanceCents = Math.round(balanceAmount * 100);
+        const desc = job.title || `${job.serviceType || "Service"} Package`;
+
+        const { invoice, finalized } = await createAndSendStripeInvoice(stripe, {
+          customerId,
+          amountCents: balanceCents,
+          lineDescription: `${desc} — Balance (50%)`,
+          invoiceDescription: `Garage Scholars — ${desc} — Balance Due`,
+          jobId: doc.id,
+          splitType: "balance_50",
+          packageTier: job.package || "",
+        });
+
+        await db.collection(GS_COLLECTIONS.CUSTOMER_PAYMENTS).add({
+          customerId,
+          customerName: job.clientName,
+          customerEmail: job.clientEmail,
+          jobId: doc.id,
+          amount: balanceAmount,
+          fullJobAmount: fullAmount,
+          type: "invoice",
+          splitType: "balance_50",
+          stripeInvoiceId: invoice.id,
+          stripePaymentIntentId: finalized.payment_intent || null,
+          paymentMethod: "invoice",
+          convenienceFee: 0,
+          totalCharged: balanceAmount,
+          status: "pending",
+          description: `${desc} — Balance (50%)`,
+          invoiceUrl: finalized.hosted_invoice_url || null,
+          invoicePdf: finalized.invoice_pdf || null,
+          createdAt: FieldValue.serverTimestamp(),
+        });
+
+        await doc.ref.update({
+          balanceInvoiceId: invoice.id,
+          clientPaymentStatus: "pending_balance",
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+
+        // ALERT admin that safety net caught a missed invoice
+        await db.collection("mail").add({
+          to: ["garagescholars@gmail.com"],
+          message: {
+            subject: `[SAFETY NET] Missed Balance Invoice Sent: ${job.clientName}`,
+            html: `<h2>Safety Net: Balance Invoice Recovered</h2>
+              <p>A balance invoice was missed during normal job completion flow and has been automatically sent by the safety-net scheduler.</p>
+              <p><strong>Client:</strong> ${job.clientName} (${job.clientEmail})</p>
+              <p><strong>Balance:</strong> $${balanceAmount.toFixed(2)}</p>
+              <p><strong>Job:</strong> ${desc}</p>
+              <p><strong>Invoice:</strong> ${invoice.id}</p>`,
+          },
+          createdAt: FieldValue.serverTimestamp(),
+        });
+
+        sent++;
+        console.log(`[gsCheckMissedBalanceInvoices] RECOVERED: Sent balance invoice for job ${doc.id}`);
+      } catch (err) {
+        console.error(`[gsCheckMissedBalanceInvoices] Failed to send balance for job ${doc.id}:`, err);
+        // Notify admin of failure so they can manually intervene
+        await db.collection("mail").add({
+          to: ["garagescholars@gmail.com"],
+          message: {
+            subject: `[ALERT] Failed to Send Balance Invoice: ${job.clientName}`,
+            html: `<h2>Balance Invoice Send Failed</h2>
+              <p>The safety-net scheduler failed to send a balance invoice. Please send it manually.</p>
+              <p><strong>Client:</strong> ${job.clientName} (${job.clientEmail})</p>
+              <p><strong>Job ID:</strong> ${doc.id}</p>
+              <p><strong>Error:</strong> ${(err as Error).message}</p>`,
+          },
+          createdAt: FieldValue.serverTimestamp(),
+        });
+      }
+    }
+
+    console.log(`[gsCheckMissedBalanceInvoices] Done. Recovered ${sent} missed balance invoices.`);
   }
 );

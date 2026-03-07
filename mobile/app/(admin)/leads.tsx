@@ -301,6 +301,8 @@ export default function AdminLeadsScreen() {
       return;
     }
 
+    const depositAmount = Math.round(price * 0.5 * 100) / 100;
+
     setInvoiceSending(true);
     setError(null);
 
@@ -313,15 +315,16 @@ export default function AdminLeadsScreen() {
         description: `${PACKAGE_LABELS[convertFormData.selectedPackage] || convertFormData.selectedPackage} Package — ${convertFormData.address.trim() || "Garage Organization"}`,
         jobId: convertingLead.id,
         packageTier: convertFormData.selectedPackage,
+        splitType: "deposit_50",
       });
 
-      const data = result.data as { invoiceId?: string; invoiceUrl?: string };
+      const data = result.data as { invoiceId?: string; invoiceUrl?: string; invoiceAmount?: number };
       if (Platform.OS === "web") {
         setError(null);
         setSopError(null);
-        alert(`Invoice sent to ${email}!\n\nStripe Invoice: ${data.invoiceId}`);
+        alert(`50% Deposit Invoice ($${depositAmount.toFixed(2)}) sent to ${email}!\n\nThe balance ($${depositAmount.toFixed(2)}) will be auto-sent when the job is completed.\n\nStripe Invoice: ${data.invoiceId}`);
       } else {
-        Alert.alert("Invoice Sent", `Invoice emailed to ${email}.`);
+        Alert.alert("Deposit Invoice Sent", `50% deposit ($${depositAmount.toFixed(2)}) invoiced to ${email}.\n\nBalance will be auto-sent on job completion.`);
       }
     } catch (err: any) {
       const msg = err?.message || "Failed to send invoice.";
@@ -1642,7 +1645,7 @@ export default function AdminLeadsScreen() {
                 ) : (
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                     <Ionicons name="receipt-outline" size={16} color="#fff" />
-                    <Text style={styles.footerBtnInvoiceText}>Send Invoice</Text>
+                    <Text style={styles.footerBtnInvoiceText}>Send 50% Invoice</Text>
                   </View>
                 )}
               </TouchableOpacity>

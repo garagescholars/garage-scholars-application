@@ -127,3 +127,11 @@ export const STRIPE_PRICE_IDS: Record<GsPackageKey, string> = {
   scholar:       "price_1T8qOr4KuxCafVYJECDBWQDI",
   tenured:       "price_1T8qOs4KuxCafVYJOyDUruPH",
 };
+
+// ── Client Split Payment Constants ──
+
+/** Client deposit percentage (paid upfront after sale) */
+export const CLIENT_DEPOSIT_PERCENT = 50;
+
+/** Client balance percentage (invoiced after job completion) */
+export const CLIENT_BALANCE_PERCENT = 50;

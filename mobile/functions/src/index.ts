@@ -43,6 +43,8 @@ export {
   gsGeneratePaymentReport,
   gsExportPaymentData,
   gsCreateInvoice,
+  gsCreateBalanceInvoice,
+  gsCheckMissedBalanceInvoices,
 } from "./gs-payments";
 
 // ── Garage Scholars Social Media functions ──
