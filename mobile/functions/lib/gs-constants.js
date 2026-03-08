@@ -4,7 +4,7 @@
  * Mirror of mobile/src/constants/collections.ts for Cloud Functions
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.CONVENIENCE_FEE_PERCENT = exports.PAY_PERIOD_BOUNDARIES = exports.TAX_1099_THRESHOLD = exports.COMPLETION_SPLIT_PERCENT = exports.CHECKIN_SPLIT_PERCENT = exports.MINIMUM_SCORE_FOR_PAYMENT = exports.PAYMENT_RELEASE_HOURS = exports.MAX_RECENT_CLAIMS = exports.TIER_THRESHOLDS = exports.TRANSFER_EXPIRY_MINUTES = exports.SCORE_LOCK_HOURS = exports.SCORING_WEIGHTS = exports.GS_COLLECTIONS = void 0;
+exports.STRIPE_PRICE_IDS = exports.GS_PACKAGES = exports.CONVENIENCE_FEE_PERCENT = exports.PAY_PERIOD_BOUNDARIES = exports.TAX_1099_THRESHOLD = exports.COMPLETION_SPLIT_PERCENT = exports.CHECKIN_SPLIT_PERCENT = exports.MINIMUM_SCORE_FOR_PAYMENT = exports.PAYMENT_RELEASE_HOURS = exports.MAX_RECENT_CLAIMS = exports.TIER_THRESHOLDS = exports.TRANSFER_EXPIRY_MINUTES = exports.SCORE_LOCK_HOURS = exports.SCORING_WEIGHTS = exports.GS_COLLECTIONS = void 0;
 exports.GS_COLLECTIONS = {
     PROFILES: "gs_profiles",
     SCHOLAR_PROFILES: "gs_scholarProfiles",
@@ -75,3 +75,39 @@ exports.TAX_1099_THRESHOLD = 600;
 exports.PAY_PERIOD_BOUNDARIES = [1, 16];
 /** Convenience fee percentage for card payments */
 exports.CONVENIENCE_FEE_PERCENT = 3.0;
+// ── Package Pricing ──
+/** One-time service package prices (in dollars) */
+exports.GS_PACKAGES = {
+    // Garage Organization
+    undergraduate: { name: "The Undergraduate", category: "Garage Organization", price: 1197, type: "one_time" },
+    graduate: { name: "The Graduate", category: "Garage Organization", price: 2197, type: "one_time" },
+    doctorate: { name: "The Doctorate", category: "Garage Organization", price: 3697, type: "one_time" },
+    // Home Gym Installation
+    warmup: { name: "Warm Up", category: "Home Gym Installation", price: 997, type: "one_time" },
+    superset: { name: "Super Set", category: "Home Gym Installation", price: 1997, type: "one_time" },
+    "1repmax": { name: "1 Rep Max", category: "Home Gym Installation", price: 4797, type: "one_time" },
+    // Combo Bundles
+    "deans-list": { name: "The Dean's List", category: "Bundle", price: 6497, type: "one_time" },
+    valedictorian: { name: "The Valedictorian", category: "Bundle", price: 7997, type: "one_time" },
+    // Monthly Memberships
+    freshman: { name: "The Freshman", category: "Monthly Membership", price: 97, type: "recurring" },
+    scholar: { name: "The Scholar", category: "Monthly Membership", price: 197, type: "recurring" },
+    tenured: { name: "The Tenured", category: "Monthly Membership", price: 347, type: "recurring" },
+};
+/**
+ * Stripe Price IDs — populated after running scripts/create-stripe-products.js
+ * One-time packages use payment_intent flow; memberships use subscription flow.
+ */
+exports.STRIPE_PRICE_IDS = {
+    undergraduate: "price_1T8qOn4KuxCafVYJG7rXPu1D",
+    graduate: "price_1T8qOo4KuxCafVYJr8IGqYOB",
+    doctorate: "price_1T8qOo4KuxCafVYJeIoyPKc3",
+    warmup: "price_1T8qOp4KuxCafVYJrMVN9xSE",
+    superset: "price_1T8qOp4KuxCafVYJhakLcN3f",
+    "1repmax": "price_1T8qOq4KuxCafVYJcARQAkmQ",
+    "deans-list": "price_1T8qOq4KuxCafVYJBAknkwxG",
+    valedictorian: "price_1T8qOq4KuxCafVYJY5EmxS0b",
+    freshman: "price_1T8qOr4KuxCafVYJE9AUQCfP",
+    scholar: "price_1T8qOr4KuxCafVYJECDBWQDI",
+    tenured: "price_1T8qOs4KuxCafVYJOyDUruPH",
+};

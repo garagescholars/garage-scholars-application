@@ -86,3 +86,44 @@ export const PAY_PERIOD_BOUNDARIES = [1, 16] as const;
 
 /** Convenience fee percentage for card payments */
 export const CONVENIENCE_FEE_PERCENT = 3.0;
+
+// ── Package Pricing ──
+
+/** One-time service package prices (in dollars) */
+export const GS_PACKAGES = {
+  // Garage Organization
+  undergraduate: { name: "The Undergraduate", category: "Garage Organization", price: 1197, type: "one_time" as const },
+  graduate:      { name: "The Graduate",      category: "Garage Organization", price: 2197, type: "one_time" as const },
+  doctorate:     { name: "The Doctorate",     category: "Garage Organization", price: 3697, type: "one_time" as const },
+  // Home Gym Installation
+  warmup:   { name: "Warm Up",   category: "Home Gym Installation", price: 997,  type: "one_time" as const },
+  superset: { name: "Super Set", category: "Home Gym Installation", price: 1997, type: "one_time" as const },
+  "1repmax":  { name: "1 Rep Max",  category: "Home Gym Installation", price: 4797, type: "one_time" as const },
+  // Combo Bundles
+  "deans-list":    { name: "The Dean's List",    category: "Bundle", price: 6497, type: "one_time" as const },
+  valedictorian:   { name: "The Valedictorian",  category: "Bundle", price: 7997, type: "one_time" as const },
+  // Monthly Memberships
+  freshman: { name: "The Freshman", category: "Monthly Membership", price: 97,  type: "recurring" as const },
+  scholar:  { name: "The Scholar",  category: "Monthly Membership", price: 197, type: "recurring" as const },
+  tenured:  { name: "The Tenured",  category: "Monthly Membership", price: 347, type: "recurring" as const },
+} as const;
+
+export type GsPackageKey = keyof typeof GS_PACKAGES;
+
+/**
+ * Stripe Price IDs — populated after running scripts/create-stripe-products.js
+ * One-time packages use payment_intent flow; memberships use subscription flow.
+ */
+export const STRIPE_PRICE_IDS: Record<GsPackageKey, string> = {
+  undergraduate: "price_1T8qOn4KuxCafVYJG7rXPu1D",
+  graduate:      "price_1T8qOo4KuxCafVYJr8IGqYOB",
+  doctorate:     "price_1T8qOo4KuxCafVYJeIoyPKc3",
+  warmup:        "price_1T8qOp4KuxCafVYJrMVN9xSE",
+  superset:      "price_1T8qOp4KuxCafVYJhakLcN3f",
+  "1repmax":     "price_1T8qOq4KuxCafVYJcARQAkmQ",
+  "deans-list":  "price_1T8qOq4KuxCafVYJBAknkwxG",
+  valedictorian: "price_1T8qOq4KuxCafVYJY5EmxS0b",
+  freshman:      "price_1T8qOr4KuxCafVYJE9AUQCfP",
+  scholar:       "price_1T8qOr4KuxCafVYJECDBWQDI",
+  tenured:       "price_1T8qOs4KuxCafVYJOyDUruPH",
+};
