@@ -1,4 +1,4 @@
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert } from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert, Platform } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
@@ -64,17 +64,23 @@ export default function MoreScreen() {
   const router = useRouter();
 
   const handleViewAsScholar = () => {
-    Alert.alert(
-      "View as Scholar",
-      "Switch to the scholar view to see what scholars see — available jobs, my jobs, goals, and profile.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Switch to Scholar View",
-          onPress: () => router.push("/(scholar)/jobs"),
-        },
-      ]
-    );
+    if (Platform.OS === "web") {
+      if (window.confirm("Switch to the scholar view?")) {
+        router.push("/(scholar)/jobs" as any);
+      }
+    } else {
+      Alert.alert(
+        "View as Scholar",
+        "Switch to the scholar view to see what scholars see — available jobs, my jobs, goals, and profile.",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Switch to Scholar View",
+            onPress: () => router.push("/(scholar)/jobs" as any),
+          },
+        ]
+      );
+    }
   };
 
   return (
