@@ -28,6 +28,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Scholars", icon: "people-outline", path: "/(admin)/scholars", group: "Operations" },
   { label: "Dashboard", icon: "grid-outline", path: "/(admin)/dashboard", group: "Operations" },
   { label: "Leads & SOPs", icon: "document-text-outline", path: "/(admin)/leads", group: "Operations" },
+  { label: "Consultations", icon: "image-outline", path: "/(admin)/consultations", group: "Operations" },
   { label: "Payouts", icon: "cash-outline", path: "/(admin)/payouts", group: "Finance" },
   { label: "Transfers", icon: "swap-horizontal-outline", path: "/(admin)/transfers", group: "Finance" },
   { label: "Analytics", icon: "stats-chart-outline", path: "/(admin)/analytics", group: "Insights" },
@@ -254,6 +255,7 @@ export default function AdminLayout() {
           <Tabs.Screen name="unified" options={{ href: null, headerTitle: "Business Dashboard" }} />
           <Tabs.Screen name="social-media" options={{ href: null, headerTitle: "Social Media" }} />
           <Tabs.Screen name="share-app" options={{ href: null, headerTitle: "Share App" }} />
+          <Tabs.Screen name="consultations" options={{ href: null, headerTitle: "Consultations" }} />
         </Tabs>
       </View>
     </View>

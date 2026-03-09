@@ -23,6 +23,12 @@ const MENU_ITEMS: MenuItem[] = [
     path: "/(admin)/leads",
   },
   {
+    label: "Consultations",
+    subtitle: "AI mockups for live sales demos",
+    icon: "image-outline",
+    path: "/(admin)/consultations",
+  },
+  {
     label: "Payouts",
     subtitle: "Track and manage payments",
     icon: "cash-outline",

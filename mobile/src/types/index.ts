@@ -676,6 +676,61 @@ export type GsDonationReceipt = {
   uploadedBy: string;
 };
 
+// ── Consultation Mockups (gs_consultations) ──
+
+export type ConsultationServiceType = "garage_org" | "gym_install";
+export type ConsultationStatus = "draft" | "photos_captured" | "generating" | "ready" | "shared";
+export type MockupStatus = "idle" | "generating" | "ready" | "failed";
+
+export type MockupTier = {
+  status: MockupStatus;
+  imageUrl: string | null;
+};
+
+export type GsConsultation = {
+  id: string;
+  clientName: string;
+  clientEmail: string | null;
+  clientPhone: string | null;
+  address: string;
+  createdBy: string;
+  createdAt?: Timestamp;
+  jobId: string | null;
+
+  serviceType: ConsultationServiceType;
+
+  spacePhotoUrls: {
+    wide: string;
+    left?: string;
+    right?: string;
+    floor?: string;
+  };
+
+  garageAddons: {
+    polyasparticFlooring: boolean;
+    flooringColor: "gray" | "tan" | "charcoal" | "blue" | null;
+    overheadStorage: boolean;
+    extraShelving: boolean;
+  };
+
+  gymAddons: {
+    rubberFlooring: boolean;
+    flooringColor: "black" | "gray" | "blue" | null;
+    mirrorWall: boolean;
+    cableSystem: boolean;
+    pullUpRig: boolean;
+  };
+
+  mockups: {
+    tier1: MockupTier;
+    tier2: MockupTier;
+    tier3: MockupTier;
+  };
+
+  status: ConsultationStatus;
+  updatedAt?: Timestamp;
+};
+
 // ── Gym Installation Photos (gs_gym_install_photos) ──
 
 export type GsGymInstallPhotos = {

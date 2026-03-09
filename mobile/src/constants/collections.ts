@@ -36,4 +36,6 @@ export const COLLECTIONS = {
   RESALE_DONATION_ITEMS: 'gs_resale_donation_items',
   DONATION_RECEIPTS: 'gs_donation_receipts',
   GYM_INSTALL_PHOTOS: 'gs_gym_install_photos',
+  // Consultation mockups
+  CONSULTATIONS: 'gs_consultations',
 } as const;

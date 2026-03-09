@@ -38,6 +38,8 @@ export const GS_COLLECTIONS = {
   HIRING_VIDEO_COMPLETIONS: "gs_hiringVideoCompletions",
   HIRING_INTERVIEW_SCORES: "gs_hiringInterviewScores",
   HIRING_VIDEO_TOKENS: "gs_hiringVideoTokens",
+  // Consultation mockups
+  CONSULTATIONS: "gs_consultations",
 } as const;
 
 /** Quality score weights — must total 1.0 */

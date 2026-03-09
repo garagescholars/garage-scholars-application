@@ -86,6 +86,11 @@ export {
   gsHiringVideoReminder,
 } from "./gs-hiring";
 
+// ── Garage Scholars Consultation Mockup functions ──
+export {
+  gsGenerateConsultMockup,
+} from "./gs-consultation";
+
 const db = getFirestore();
 const storage = getStorage();
 const adminAuth = getAuth();
