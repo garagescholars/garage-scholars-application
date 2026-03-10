@@ -55,7 +55,53 @@ export function usePayouts(scholarId: string | undefined) {
 }
 
 /**
- * Check Stripe onboarding status for a user.
+ * Check bank account status for a scholar (direct deposit via Mercury).
+ */
+export function useBankStatus(userId: string | undefined) {
+  const [account, setAccount] = useState<Record<string, any> | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!userId) {
+      setLoading(false);
+      return;
+    }
+
+    const q = query(
+      collection(db, COLLECTIONS.STRIPE_ACCOUNTS),
+      where("userId", "==", userId),
+      where("accountType", "==", "scholar")
+    );
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        if (!snap.empty) {
+          setAccount({ id: snap.docs[0].id, ...snap.docs[0].data() });
+        } else {
+          setAccount(null);
+        }
+        setLoading(false);
+      },
+      () => {
+        setLoading(false);
+      }
+    );
+
+    return () => unsub();
+  }, [userId]);
+
+  return {
+    account,
+    loading,
+    bankLinked: account?.payoutsEnabled ?? false,
+    bankLast4: account?.bankLast4 ?? null,
+    bankAccountType: account?.bankAccountType ?? null,
+  };
+}
+
+/**
+ * @deprecated Use useBankStatus instead. Kept for backward compatibility.
  */
 export function useStripeStatus(userId: string | undefined) {
   const [stripeAccount, setStripeAccount] = useState<GsStripeAccount | null>(null);
