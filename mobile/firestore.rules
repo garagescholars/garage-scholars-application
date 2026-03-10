@@ -378,5 +378,16 @@ service cloud.firestore {
     match /gs_hiringInterviewScores/{scoreId} {
       allow read, write: if isAdminByEmail();
     }
+
+    // ═══════════════════════════════════════════════════════════
+    // Consultation Mockup Collections
+    // ═══════════════════════════════════════════════════════════
+
+    // gs_consultations — admin creates/manages, functions update mockup status
+    match /gs_consultations/{consultationId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdminByEmail();
+      allow delete: if isAdminByEmail();
+    }
   }
 }

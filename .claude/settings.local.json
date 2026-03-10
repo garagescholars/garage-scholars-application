@@ -6,7 +6,8 @@
       "Bash(gh auth:*)",
       "Bash(gh api:*)",
       "Bash(cd \"/Users/tylersodia/Desktop/Garage Scholars/mobile/functions\" && npm run build 2>&1)",
-      "Bash(cd \"/Users/tylersodia/Desktop/Garage Scholars/Website\" && node build.js 2>&1)"
+      "Bash(cd \"/Users/tylersodia/Desktop/Garage Scholars/Website\" && node build.js 2>&1)",
+      "Bash(cd \"/Users/tylersodia/Desktop/Garage Scholars/mobile\" && gcloud alpha identity-toolkit project-configs describe --project garage-scholars-v2 2>&1 | grep -i \"domain\" -A 30 | head -30)"
     ]
   }
 }

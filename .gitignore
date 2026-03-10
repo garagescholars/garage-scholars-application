@@ -44,3 +44,13 @@ website-backup/
 .firebase/
 **/.firebase/
 .vercel
+
+# David Test — generated images and raw photos (too large for git)
+David Test/renditions*/
+David Test/pipeline_full_test/
+David Test/resized/
+David Test/jpg/
+David Test/*.HEIC
+David Test/*.jpg
+David Test/*.png
+~$*
