@@ -37,6 +37,8 @@ import type {
   CableOption,
   GymAccessory,
   BMColorRef,
+  BikeRackOption,
+  GenerationMode,
 } from "../../../../src/types";
 
 const PACKAGES = {
@@ -82,6 +84,18 @@ const GARAGE_FLOORING_OPTIONS: { key: GarageFlooringType; label: string }[] = [
   { key: "none", label: "None" },
   { key: "polyaspartic", label: "Polyaspartic Coating" },
   { key: "click-in-plate", label: "Click-In Plate" },
+];
+
+const BIKE_RACK_OPTIONS: { key: BikeRackOption; label: string }[] = [
+  { key: "none", label: "None" },
+  { key: "wall-2", label: "2-Bike Wall Rack" },
+  { key: "wall-4", label: "4-Bike Wall Rack" },
+];
+
+const GEN_MODE_OPTIONS: { key: GenerationMode; label: string; desc: string }[] = [
+  { key: "both", label: "Both (A/B Test)", desc: "Run Kontext 2-pass + FLUX.2 Pro side by side" },
+  { key: "kontext-2pass", label: "Kontext 2-Pass", desc: "Paint first, then add storage" },
+  { key: "flux2-edit", label: "FLUX.2 Pro Edit", desc: "Single powerful edit pass" },
 ];
 
 const GYM_FLOORING_OPTIONS: { key: GymFlooringType; label: string }[] = [
@@ -133,6 +147,10 @@ export default function ConfigureConsultation() {
   const [garageFlooringType, setGarageFlooringType] = useState<GarageFlooringType>("none");
   const [garageFloorColor, setGarageFloorColor] = useState<BMColorRef>(null);
   const [garageColorFamily, setGarageColorFamily] = useState<BMFamily>("gray");
+  const [garageBikeRack, setGarageBikeRack] = useState<BikeRackOption>("none");
+
+  // Generation mode
+  const [genMode, setGenMode] = useState<GenerationMode>("both");
 
   // Gym addons state
   const [gymFlooringType, setGymFlooringType] = useState<GymFlooringType>("none");
@@ -163,6 +181,7 @@ export default function ConfigureConsultation() {
                 ? { code: "", name: ga.flooringColor }
                 : null
             );
+            setGarageBikeRack(ga.bikeRack || "none");
           } else {
             // New shape
             setGarageShelving(ga.shelving || "none");
@@ -171,6 +190,7 @@ export default function ConfigureConsultation() {
             setGarageWallOrg(ga.wallOrg || "none");
             setGarageFlooringType(ga.flooringType || (ga.flooring ? "polyaspartic" : "none"));
             setGarageFloorColor(ga.flooringColor || null);
+            setGarageBikeRack(ga.bikeRack || "none");
           }
         }
 
@@ -227,6 +247,7 @@ export default function ConfigureConsultation() {
           wallOrg: garageWallOrg,
           flooringType: garageFlooringType,
           flooringColor: garageFlooringType !== "none" ? garageFloorColor : null,
+          bikeRack: garageBikeRack,
         },
         gymAddons: {
           flooringType: gymFlooringType,
@@ -236,15 +257,25 @@ export default function ConfigureConsultation() {
           cableMachine: gymCable,
           accessories: gymAccessories,
         },
+        generationMode: genMode,
         status: "generating",
         updatedAt: serverTimestamp(),
       });
 
       const generateMockup = httpsCallable(functions, "gsGenerateConsultMockup");
       const tiers = ["tier1", "tier2", "tier3"] as const;
+
+      // Determine which modes to fire
+      const modes: string[] = genMode === "both"
+        ? ["kontext-2pass", "flux2-edit"]
+        : [genMode];
+
+      // Fire all tier × mode combinations in parallel
       tiers.forEach((tier) => {
-        generateMockup({ consultationId: id, tier }).catch((err) => {
-          console.error(`Failed to generate ${tier}:`, err);
+        modes.forEach((m) => {
+          generateMockup({ consultationId: id, tier, mode: m }).catch((err) => {
+            console.error(`Failed to generate ${tier}/${m}:`, err);
+          });
         });
       });
 
@@ -335,6 +366,7 @@ export default function ConfigureConsultation() {
               onSelectColor={setGarageFloorColor}
             />
           )}
+          <OptionPicker label="Bike Rack (Monkey Bars)" options={BIKE_RACK_OPTIONS} selected={garageBikeRack} onSelect={setGarageBikeRack} />
         </View>
       ) : (
         <View style={styles.addonSection}>
@@ -372,6 +404,28 @@ export default function ConfigureConsultation() {
         </View>
       )}
 
+      {/* Generation Mode Selector */}
+      <Text style={styles.sectionLabel}>AI ENGINE</Text>
+      <View style={styles.addonSection}>
+        {GEN_MODE_OPTIONS.map((opt) => (
+          <TouchableOpacity
+            key={opt.key}
+            style={[styles.modeCard, genMode === opt.key && styles.modeCardActive]}
+            onPress={() => setGenMode(opt.key)}
+          >
+            <View style={styles.modeHeader}>
+              {genMode === opt.key && (
+                <Ionicons name="checkmark-circle" size={18} color={colors.brand.teal} />
+              )}
+              <Text style={[styles.modeLabel, genMode === opt.key && styles.modeLabelActive]}>
+                {opt.label}
+              </Text>
+            </View>
+            <Text style={styles.modeDesc}>{opt.desc}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
       {/* Generate Button */}
       <TouchableOpacity
         style={[styles.generateBtn, generating && styles.generateBtnDisabled]}
@@ -389,7 +443,9 @@ export default function ConfigureConsultation() {
       </TouchableOpacity>
 
       <Text style={styles.hint}>
-        AI will generate 3 mockups — one per package tier. Takes ~15-30 seconds each.
+        {genMode === "both"
+          ? "AI will generate 6 mockups — 3 tiers × 2 engines. Takes ~30-60 seconds."
+          : "AI will generate 3 mockups — one per package tier. Takes ~15-30 seconds each."}
       </Text>
     </ScrollView>
   );
@@ -668,6 +724,37 @@ const styles = StyleSheet.create({
     fontSize: 9,
     color: colors.text.muted,
     textAlign: "center",
+  },
+  // Mode selector
+  modeCard: {
+    backgroundColor: colors.bg.card,
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1.5,
+    borderColor: "transparent",
+  },
+  modeCardActive: {
+    borderColor: colors.brand.teal,
+    backgroundColor: `${colors.brand.teal}10`,
+  },
+  modeHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  modeLabel: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.text.muted,
+  },
+  modeLabelActive: {
+    color: colors.brand.teal,
+  },
+  modeDesc: {
+    fontSize: 12,
+    color: colors.text.secondary,
+    marginTop: 4,
+    marginLeft: 24,
   },
   generateBtn: {
     flexDirection: "row",

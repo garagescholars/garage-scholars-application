@@ -1,8 +1,17 @@
 /**
- * Garage Scholars — Consultation Mockup Generation
+ * Garage Scholars — Consultation Mockup Generation (v2)
  *
- * Uses fal.ai FLUX.1 [pro] Fill (inpainting) to generate AI mockups
- * of garage organization and home gym installations during live sales consults.
+ * Dual-mode AI mockup generation for luxury garage transformations:
+ *   A) Kontext 2-Pass — Paint walls first, then add storage (iterative)
+ *   B) FLUX.2 Pro Edit — Single powerful edit pass (heavier transformations)
+ *
+ * Uses fal.ai models:
+ *   - FLUX.1 Kontext [pro]: fal-ai/flux-pro/kontext
+ *   - FLUX.2 [pro] Edit:    fal-ai/flux-2-pro/edit
+ *
+ * Monkey Bars bike rack reference (model 01004):
+ *   Gray powder-coated steel wall-mounted bar with sliding J-hooks,
+ *   holds 2-4 bikes vertically. Industrial-grade, lifetime warranty.
  */
 
 import { onCall, HttpsError } from "firebase-functions/v2/https";
@@ -15,6 +24,7 @@ const storage = getStorage();
 
 type ServiceType = "garage_org" | "gym_install";
 type Tier = "tier1" | "tier2" | "tier3";
+type GenerationMode = "kontext-2pass" | "flux2-edit" | "classic";
 
 // ── Package metadata ──
 
@@ -34,7 +44,7 @@ const GS_PACKAGES = {
 // ── Backward compatibility helpers ──
 
 function normalizeGarageAddons(raw: any) {
-  if (!raw) return { shelving: "none", overheadStorage: "none", cabinets: "none", wallOrg: "none", flooringType: "none", flooringColor: null };
+  if (!raw) return { shelving: "none", overheadStorage: "none", cabinets: "none", wallOrg: "none", flooringType: "none", flooringColor: null, bikeRack: "none" };
   // Old boolean shape
   if (typeof raw.overheadStorage === "boolean" || typeof raw.polyasparticFlooring === "boolean") {
     return {
@@ -46,18 +56,18 @@ function normalizeGarageAddons(raw: any) {
       flooringColor: raw.flooringColor && typeof raw.flooringColor === "string"
         ? { code: "", name: raw.flooringColor }
         : raw.flooringColor || null,
+      bikeRack: raw.bikeRack || "none",
     };
   }
   // Handle transitional shape with boolean `flooring` field
   if (typeof raw.flooring === "boolean") {
-    return { ...raw, flooringType: raw.flooring ? "polyaspartic" : "none" };
+    return { ...raw, flooringType: raw.flooring ? "polyaspartic" : "none", bikeRack: raw.bikeRack || "none" };
   }
-  return raw;
+  return { ...raw, bikeRack: raw.bikeRack || "none" };
 }
 
 function normalizeGymAddons(raw: any) {
   if (!raw) return { flooringType: "none", flooringColor: null, rackSystem: "none", bench: "none", cableMachine: "none", accessories: [] };
-  // Old boolean shape
   if (typeof raw.rubberFlooring === "boolean" || typeof raw.cableSystem === "boolean") {
     const accessories: string[] = [];
     if (raw.mirrorWall) accessories.push("mirrors");
@@ -73,48 +83,51 @@ function normalizeGymAddons(raw: any) {
       accessories,
     };
   }
-  // Handle transitional shape with boolean `flooring` field
   if (typeof raw.flooring === "boolean") {
     return { ...raw, flooringType: raw.flooring ? "rubber-tiles" : "none" };
   }
   return raw;
 }
 
-// ── Prompt builders ──
+// ══════════════════════════════════════════════════════════════
+// LUXURY PROMPT SYSTEM — Dramatic before/after transformations
+// ══════════════════════════════════════════════════════════════
+
+const LUXURY_PREAMBLE = "Professional interior design photography of a luxury garage transformation. Magazine-quality, photorealistic, bright even LED lighting, clean lines, premium materials throughout.";
+
+const MONKEY_BARS_DESC = {
+  "wall-2": "a Monkey Bars wall-mounted 2-bike storage rack — a sleek gray powder-coated steel horizontal bar with two adjustable sliding J-hooks, bikes hung vertically by their front wheels, mounted high on the wall to save floor space",
+  "wall-4": "a Monkey Bars wall-mounted 4-bike storage rack — a 53-inch gray powder-coated industrial steel bar with four adjustable sliding J-hooks with rubber coating, four bikes hung vertically by their front wheels in a neat row, mounted high on the wall",
+};
 
 function buildSpaceContext(doc: any): string {
   const parts: string[] = [];
-
   const size = doc.garageSize || "2-car";
   const ceiling = doc.ceilingHeight;
-  let sizeStr = `This is a ${size} garage`;
-  if (ceiling === "open-joists") sizeStr += " with open joist ceilings";
+  let sizeStr = `${size} garage`;
+  if (ceiling === "open-joists") sizeStr += " with exposed open joist ceilings";
   else if (ceiling === "10ft+") sizeStr += " with tall 10-foot ceilings";
   else if (ceiling) sizeStr += ` with ${ceiling} ceilings`;
-  parts.push(sizeStr + ".");
+  parts.push(sizeStr);
 
   const states: string[] = doc.currentState || [];
-  if (states.includes("cluttered")) parts.push("The space is currently cluttered with items.");
-  if (states.includes("cars-parked")) parts.push("Cars may be parked in the space.");
+  if (states.includes("cluttered")) parts.push("currently cluttered");
+  if (states.includes("cars-parked")) parts.push("cars may be parked");
 
-  if (doc.itemsToPreserve) {
-    parts.push(`Keep the following items unchanged: ${doc.itemsToPreserve}.`);
-  }
-
-  return parts.join(" ");
+  return parts.join(", ");
 }
 
 function getStyleText(style: string | undefined): string {
   switch (style) {
-    case "workshop": return "Functional workshop-style";
-    case "minimalist": return "Clean, minimalist";
-    default: return "Sleek, modern, magazine-quality";
+    case "workshop": return "high-end workshop aesthetic with premium tool organization";
+    case "minimalist": return "ultra-clean minimalist design with hidden storage and seamless surfaces";
+    default: return "sleek modern luxury garage with magazine-quality design";
   }
 }
 
-function buildFloorInstruction(addons: any, serviceType: "garage" | "gym"): string {
+function buildFloorInstruction(addons: any, _serviceType: "garage" | "gym"): string {
   const flooringType = addons.flooringType || "none";
-  if (flooringType === "none") return "Keep existing floor surface.";
+  if (flooringType === "none") return "";
 
   const color = addons.flooringColor;
   const colorStr = color?.name && color?.code
@@ -124,62 +137,145 @@ function buildFloorInstruction(addons: any, serviceType: "garage" | "gym"): stri
     : "";
 
   const flooringMap: Record<string, string> = {
-    "polyaspartic": `${colorStr}polyaspartic flake floor coating`,
-    "click-in-plate": `${colorStr}click-in diamond plate garage flooring tiles`,
-    "stall-mats": `${colorStr}rubber stall mat flooring (3/4" thick)`,
-    "rubber-tiles": `${colorStr}interlocking rubber floor tiles`,
+    "polyaspartic": `pristine ${colorStr}polyaspartic flake floor coating with a glossy showroom finish`,
+    "click-in-plate": `premium ${colorStr}click-in diamond plate garage flooring tiles with a factory-fresh metallic sheen`,
+    "stall-mats": `thick ${colorStr}rubber stall mat flooring (3/4" commercial grade)`,
+    "rubber-tiles": `professional ${colorStr}interlocking rubber floor tiles with clean seams`,
   };
 
-  const flooringDesc = flooringMap[flooringType] || `${colorStr}flooring`;
-  return `Replace the floor with ${flooringDesc}.`;
+  return flooringMap[flooringType] || `${colorStr}premium flooring`;
 }
 
-function buildGarageOrgPrompt(tier: Tier, doc: any): string {
-  const addons = normalizeGarageAddons(doc.garageAddons);
-  const context = buildSpaceContext(doc);
-  const style = getStyleText(doc.stylePreference);
-  const floor = buildFloorInstruction(addons, "garage");
-  const dream = doc.dreamDescription ? ` Client vision: ${doc.dreamDescription}.` : "";
+function buildBikeRackInstruction(addons: any): string {
+  const rack = addons.bikeRack || "none";
+  if (rack === "none") return "";
+  return MONKEY_BARS_DESC[rack as keyof typeof MONKEY_BARS_DESC] || "";
+}
 
-  // Build item list based on tier + addon selections
+// ── Paint-Only Prompt (Kontext Pass 1) ──
+
+function buildPaintPrompt(doc: any): string {
+  const addons = normalizeGarageAddons(doc.garageAddons);
+  const color = addons.flooringColor;
+  // Use floor color for walls too if available, otherwise default to clean white
+  const wallColor = color?.name && color?.code
+    ? `Benjamin Moore ${color.name} (${color.code})`
+    : "crisp bright white";
+
+  return `Transform this garage with a complete luxury paint job. Paint ALL walls and ceiling ${wallColor} with a smooth, even, professional finish. Cover all drywall tape, mud, seams, and imperfections completely — no raw drywall showing anywhere. The walls should look freshly painted by a professional crew with clean, crisp lines. Bright, even lighting. Remove all clutter and debris from the floor. Photorealistic result.`;
+}
+
+// ── Storage/Items Prompt (Kontext Pass 2) ──
+
+function buildStoragePrompt(tier: Tier, doc: any): string {
+  const addons = normalizeGarageAddons(doc.garageAddons);
   const items: string[] = [];
+  const dream = doc.dreamDescription ? `Client vision: "${doc.dreamDescription}".` : "";
+
+  // Bike rack
+  const bikeRackDesc = buildBikeRackInstruction(addons);
+  if (bikeRackDesc) items.push(bikeRackDesc);
 
   switch (tier) {
     case "tier1": {
-      // Entry: overhead + optional shelving
       const overhead = addons.overheadStorage !== "none"
-        ? `${addons.overheadStorage === "4-racks" ? "four" : "two"} white overhead metal ceiling storage racks mounted near the ceiling joists`
-        : "two white overhead metal ceiling storage racks mounted near the ceiling joists";
+        ? `${addons.overheadStorage === "4-racks" ? "four" : "two"} heavy-duty white powder-coated overhead ceiling storage racks with wire mesh decking`
+        : "two heavy-duty white overhead ceiling storage racks mounted flush against the ceiling joists";
       items.push(overhead);
       if (addons.shelving !== "none") {
         const count = addons.shelving === "3-units" ? "three" : addons.shelving === "2-units" ? "two" : "one";
-        items.push(`${count} black wire shelving unit${count !== "one" ? "s" : ""} along the walls`);
+        items.push(`${count} commercial-grade black wire shelving unit${count !== "one" ? "s" : ""} with matching clear labeled bins`);
       }
       break;
     }
     case "tier2": {
-      // Mid: overhead + shelving with bins + wall org
+      const overhead = addons.overheadStorage !== "none"
+        ? `${addons.overheadStorage === "4-racks" ? "four" : "two"} heavy-duty overhead ceiling storage racks`
+        : "two heavy-duty overhead ceiling storage racks";
+      items.push(overhead);
+      const shelvingCount = addons.shelving === "3-units" ? "three" : addons.shelving === "2-units" ? "two" : addons.shelving === "1-unit" ? "one" : "two";
+      items.push(`${shelvingCount} commercial-grade black wire shelving unit${shelvingCount !== "one" ? "s" : ""} neatly loaded with matching labeled clear plastic storage bins`);
+      if (addons.wallOrg === "pegboard") items.push("a large pegboard tool organization wall with premium hooks and tool silhouettes");
+      else if (addons.wallOrg === "slatwall") items.push("a commercial gray slatwall organization panel with premium hooks, baskets, and shelves");
+      break;
+    }
+    case "tier3": {
+      if (addons.cabinets === "premium-newage") items.push("a full run of NewAge Bold Series glossy black steel garage cabinets with stainless steel tops lining the walls");
+      else if (addons.cabinets === "basic-wire") items.push("wall-mounted commercial wire storage cabinets with doors");
+      else items.push("a full run of NewAge Bold Series glossy black steel garage cabinets with stainless steel countertops lining the walls");
+      const overhead = addons.overheadStorage !== "none"
+        ? `${addons.overheadStorage === "4-racks" ? "four" : "two"} heavy-duty overhead ceiling storage racks`
+        : "four heavy-duty overhead ceiling storage racks";
+      items.push(overhead);
+      if (addons.wallOrg === "slatwall") items.push("a full-wall commercial gray slatwall organization system with premium accessories");
+      else items.push("a large premium pegboard tool wall with custom tool silhouettes and heavy-duty hooks");
+      if (addons.shelving !== "none") {
+        const count = addons.shelving === "3-units" ? "three" : addons.shelving === "2-units" ? "two" : "one";
+        items.push(`${count} additional commercial shelving unit${count !== "one" ? "s" : ""}`);
+      }
+      break;
+    }
+  }
+
+  const floor = buildFloorInstruction(addons, "garage");
+  const floorStr = floor ? ` The floor has been upgraded to ${floor}.` : "";
+
+  return `Add the following premium storage systems to this garage: ${items.join("; ")}. Everything is brand new, professionally installed, perfectly level and aligned.${floorStr} ${dream} Photorealistic, match original lighting and perspective.`;
+}
+
+// ── Full Combined Prompt (for FLUX.2 Pro Edit) ──
+
+function buildFullLuxuryPrompt(tier: Tier, doc: any): string {
+  const addons = normalizeGarageAddons(doc.garageAddons);
+  const context = buildSpaceContext(doc);
+  const style = getStyleText(doc.stylePreference);
+  const dream = doc.dreamDescription ? ` Client vision: "${doc.dreamDescription}".` : "";
+
+  // Wall color
+  const wallColor = addons.flooringColor?.name && addons.flooringColor?.code
+    ? `Benjamin Moore ${addons.flooringColor.name} (${addons.flooringColor.code})`
+    : "crisp bright white";
+
+  // Build complete item list
+  const items: string[] = [];
+
+  // Bike rack
+  const bikeRackDesc = buildBikeRackInstruction(addons);
+  if (bikeRackDesc) items.push(bikeRackDesc);
+
+  switch (tier) {
+    case "tier1": {
+      const overhead = addons.overheadStorage !== "none"
+        ? `${addons.overheadStorage === "4-racks" ? "four" : "two"} heavy-duty white powder-coated overhead ceiling storage racks`
+        : "two heavy-duty white overhead ceiling storage racks";
+      items.push(overhead);
+      if (addons.shelving !== "none") {
+        const count = addons.shelving === "3-units" ? "three" : addons.shelving === "2-units" ? "two" : "one";
+        items.push(`${count} commercial-grade black wire shelving unit${count !== "one" ? "s" : ""} with labeled bins`);
+      }
+      break;
+    }
+    case "tier2": {
       const overhead = addons.overheadStorage !== "none"
         ? `${addons.overheadStorage === "4-racks" ? "four" : "two"} overhead ceiling storage racks`
         : "two overhead ceiling storage racks";
       items.push(overhead);
-      const shelvingCount = addons.shelving === "3-units" ? "three" : addons.shelving === "2-units" ? "two" : addons.shelving === "1-unit" ? "one" : "two";
-      items.push(`${shelvingCount} black wire shelving unit${shelvingCount !== "one" ? "s" : ""} with labeled clear plastic bins along the walls`);
-      if (addons.wallOrg === "pegboard") items.push("a pegboard tool wall");
-      else if (addons.wallOrg === "slatwall") items.push("a slatwall organization panel");
+      const sc = addons.shelving === "3-units" ? "three" : addons.shelving === "2-units" ? "two" : addons.shelving === "1-unit" ? "one" : "two";
+      items.push(`${sc} black wire shelving unit${sc !== "one" ? "s" : ""} with matching labeled clear bins`);
+      if (addons.wallOrg === "pegboard") items.push("a pegboard tool organization wall");
+      else if (addons.wallOrg === "slatwall") items.push("a slatwall organization panel with hooks and baskets");
       break;
     }
     case "tier3": {
-      // Premium: cabinets + overhead + wall org + everything
-      if (addons.cabinets === "premium-newage") items.push("NewAge Bold Series black steel cabinets lining the walls");
+      if (addons.cabinets === "premium-newage") items.push("NewAge Bold Series glossy black steel cabinets with stainless tops lining the walls");
       else if (addons.cabinets === "basic-wire") items.push("wall-mounted wire storage cabinets");
-      else items.push("NewAge Bold Series black steel cabinets lining the walls");
+      else items.push("NewAge Bold Series glossy black steel cabinets with stainless countertops lining the walls");
       const overhead = addons.overheadStorage !== "none"
         ? `${addons.overheadStorage === "4-racks" ? "four" : "two"} overhead ceiling storage racks`
         : "four overhead ceiling storage racks";
       items.push(overhead);
-      if (addons.wallOrg === "slatwall") items.push("a slatwall organization system");
-      else items.push("a pegboard tool wall");
+      if (addons.wallOrg === "slatwall") items.push("a full-wall slatwall organization system");
+      else items.push("a premium pegboard tool wall");
       if (addons.shelving !== "none") {
         const count = addons.shelving === "3-units" ? "three" : addons.shelving === "2-units" ? "two" : "one";
         items.push(`${count} additional shelving unit${count !== "one" ? "s" : ""}`);
@@ -188,84 +284,174 @@ function buildGarageOrgPrompt(tier: Tier, doc: any): string {
     }
   }
 
-  const itemsStr = items.join(", ");
-  return `${context} Add ${itemsStr}. ${floor} ${style} home garage. Photorealistic, match original lighting and shadows.${dream}`;
+  const floor = buildFloorInstruction(addons, "garage");
+  const floorStr = floor ? `Replace the entire floor with ${floor}.` : "";
+
+  return `${LUXURY_PREAMBLE} Complete transformation of this ${context}. Paint ALL walls and ceiling ${wallColor} — smooth, even, professional finish, no raw drywall, tape, or mud visible. ${floorStr} Install: ${items.join("; ")}. All items brand new, professionally installed, perfectly aligned. ${style}. Remove all clutter, debris, and mess — this is a showroom-ready luxury garage.${dream} Photorealistic, preserve the exact garage geometry, perspective, and proportions.`;
 }
+
+// ── Gym prompts (luxury version) ──
 
 function buildGymInstallPrompt(tier: Tier, doc: any): string {
   const addons = normalizeGymAddons(doc.gymAddons);
   const context = buildSpaceContext(doc);
   const style = getStyleText(doc.stylePreference);
-  const floor = buildFloorInstruction(addons, "gym");
-  const dream = doc.dreamDescription ? ` Client vision: ${doc.dreamDescription}.` : "";
+  const dream = doc.dreamDescription ? ` Client vision: "${doc.dreamDescription}".` : "";
 
   const items: string[] = [];
 
-  // Rack
   const rackMap: Record<string, string> = {
-    "wall-mount": "a wall-mounted pull-up bar and dumbbell rack",
-    "half-rack": "a half squat rack with barbell and plates",
-    "full-power-cage": "a full power cage/squat rack with barbell, plates, and safety bars",
+    "wall-mount": "a premium wall-mounted pull-up bar and dumbbell rack system",
+    "half-rack": "a commercial-grade half squat rack with Olympic barbell and bumper plates",
+    "full-power-cage": "a full power cage/squat rack with Olympic barbell, competition plates, and safety bars",
   };
 
-  // Bench
   const benchMap: Record<string, string> = {
-    "flat": "a flat weight bench",
-    "adjustable-fid": "an adjustable FID weight bench",
+    "flat": "a commercial flat weight bench",
+    "adjustable-fid": "a premium adjustable FID weight bench",
   };
 
-  // Cable
   const cableMap: Record<string, string> = {
-    "single-stack": "a single-stack cable machine",
-    "functional-trainer": "a functional trainer with dual adjustable pulleys",
-    "crossover": "a cable crossover machine",
+    "single-stack": "a commercial single-stack cable machine",
+    "functional-trainer": "a premium functional trainer with dual adjustable pulleys",
+    "crossover": "a full cable crossover machine",
   };
 
   switch (tier) {
     case "tier1": {
       if (addons.flooringType && addons.flooringType !== "none") {
-        items.push(addons.flooringType === "stall-mats" ? "rubber stall mat flooring covering the garage floor" : "interlocking rubber floor tiles covering the garage floor");
+        items.push(addons.flooringType === "stall-mats" ? "thick rubber stall mat flooring wall-to-wall" : "interlocking rubber floor tiles wall-to-wall");
       }
       items.push(rackMap[addons.rackSystem] || "a wall-mounted dumbbell rack with adjustable dumbbells (5-50 lbs) and a fold-flat wall-mounted pull-up bar");
       break;
     }
     case "tier2": {
       items.push(rackMap[addons.rackSystem] || "a full power cage/squat rack with barbell and plates");
-      if (addons.bench !== "none") items.push(benchMap[addons.bench] || "an adjustable FID bench");
-      else items.push("an adjustable FID bench");
-      if (addons.cableMachine !== "none") items.push(cableMap[addons.cableMachine] || "a cable machine in the corner");
+      if (addons.bench !== "none") items.push(benchMap[addons.bench] || "a premium adjustable FID bench");
+      else items.push("a premium adjustable FID bench");
+      if (addons.cableMachine !== "none") items.push(cableMap[addons.cableMachine] || "a cable machine");
       else items.push("a cable machine in the corner");
       items.push("a wall-mounted dumbbell rack");
       break;
     }
     case "tier3": {
-      items.push(rackMap[addons.rackSystem] || "a full squat rack system with barbell and competition plates");
+      items.push(rackMap[addons.rackSystem] || "a full power rack system with Olympic barbell and competition plates");
       items.push(cableMap[addons.cableMachine] || "a cable crossover machine");
       items.push("a commercial dumbbell rack (5-100 lbs)");
-      if (addons.bench !== "none") items.push(benchMap[addons.bench] || "an adjustable FID bench");
-      // Accessories
+      if (addons.bench !== "none") items.push(benchMap[addons.bench] || "a premium adjustable FID bench");
       const acc: string[] = addons.accessories || [];
       if (acc.includes("pull-up-rig")) items.push("a freestanding pull-up/muscle-up rig");
-      if (acc.includes("mirrors")) items.push("full-length mirrors on the back wall");
+      if (acc.includes("mirrors")) items.push("full-length mirrors across the back wall");
       if (acc.includes("kettlebells")) items.push("a kettlebell set on a storage rack");
       break;
     }
   }
 
-  const itemsStr = items.join(", ");
-  return `${context} Add ${itemsStr}. ${floor} ${style} home gym, bright clean lighting. Photorealistic, match original lighting and shadows.${dream}`;
+  const floor = buildFloorInstruction(addons, "gym");
+  const floorStr = floor ? `Replace the floor with ${floor}.` : "";
+
+  return `${LUXURY_PREAMBLE} Complete transformation of this ${context} into a premium home gym. ${floorStr} Install: ${items.join("; ")}. ${style} home gym with professional lighting. All equipment brand new, premium quality, perfectly positioned. Remove all clutter.${dream} Photorealistic, preserve garage geometry and perspective.`;
 }
 
-function buildPrompt(serviceType: ServiceType, tier: Tier, doc: any): string {
-  if (serviceType === "garage_org") {
-    return buildGarageOrgPrompt(tier, doc);
+// ══════════════════════════════════════════════════════════════
+// fal.ai API Callers
+// ══════════════════════════════════════════════════════════════
+
+async function callKontext(imageUrl: string, prompt: string, falApiKey: string): Promise<string> {
+  const response = await fetch("https://fal.run/fal-ai/flux-pro/kontext", {
+    method: "POST",
+    headers: {
+      Authorization: `Key ${falApiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      image_url: imageUrl,
+      prompt,
+      num_images: 1,
+      guidance_scale: 7.0, // Higher than default 3.5 for more dramatic edits
+      output_format: "png",
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Kontext returned ${response.status}: ${errText}`);
   }
-  return buildGymInstallPrompt(tier, doc);
+
+  const result = await response.json();
+  const url = result.images?.[0]?.url;
+  if (!url) throw new Error("Kontext did not return an image URL");
+  return url;
 }
 
-// ═══════════════════════════════════════════════════════════════
+async function callFlux2Edit(imageUrl: string, prompt: string, falApiKey: string): Promise<string> {
+  const response = await fetch("https://fal.run/fal-ai/flux-2-pro/edit", {
+    method: "POST",
+    headers: {
+      Authorization: `Key ${falApiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      image_urls: [imageUrl],
+      prompt,
+      image_size: "auto",
+      output_format: "png",
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`FLUX.2 Edit returned ${response.status}: ${errText}`);
+  }
+
+  const result = await response.json();
+  const url = result.images?.[0]?.url;
+  if (!url) throw new Error("FLUX.2 Edit did not return an image URL");
+  return url;
+}
+
+async function callClassicFill(imageUrl: string, prompt: string, falApiKey: string): Promise<string> {
+  const response = await fetch("https://fal.run/fal-ai/flux-pro/v1/fill", {
+    method: "POST",
+    headers: {
+      Authorization: `Key ${falApiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      image_url: imageUrl,
+      prompt,
+      num_images: 1,
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`FLUX Fill returned ${response.status}: ${errText}`);
+  }
+
+  const result = await response.json();
+  const url = result.images?.[0]?.url;
+  if (!url) throw new Error("FLUX Fill did not return an image URL");
+  return url;
+}
+
+// ── Upload helper ──
+
+async function downloadAndUpload(generatedUrl: string, storagePath: string): Promise<string> {
+  const imageResponse = await fetch(generatedUrl);
+  if (!imageResponse.ok) throw new Error("Failed to download generated image");
+  const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
+
+  const bucket = storage.bucket();
+  const file = bucket.file(storagePath);
+  await file.save(imageBuffer, { metadata: { contentType: "image/png" } });
+  await file.makePublic();
+  return `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
+}
+
+// ══════════════════════════════════════════════════════════════
 // Callable: Generate a single consultation mockup via fal.ai
-// ═══════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════
 
 export const gsGenerateConsultMockup = onCall(
   {
@@ -275,9 +461,10 @@ export const gsGenerateConsultMockup = onCall(
     secrets: ["FAL_API_KEY"],
   },
   async (request) => {
-    const { consultationId, tier } = request.data as {
+    const { consultationId, tier, mode } = request.data as {
       consultationId: string;
       tier: Tier;
+      mode?: GenerationMode;
     };
 
     if (!consultationId || !tier) {
@@ -287,6 +474,7 @@ export const gsGenerateConsultMockup = onCall(
       throw new HttpsError("invalid-argument", "tier must be tier1, tier2, or tier3");
     }
 
+    const genMode: GenerationMode = mode || "classic";
     const falApiKey = process.env.FAL_API_KEY;
     if (!falApiKey) throw new HttpsError("internal", "FAL_API_KEY not configured");
 
@@ -304,103 +492,127 @@ export const gsGenerateConsultMockup = onCall(
       throw new HttpsError("failed-precondition", "Wide-angle photo is required");
     }
 
+    // Determine status/url field paths based on mode
+    const isKontext = genMode === "kontext-2pass";
+    const isFlux2 = genMode === "flux2-edit";
+    const statusField = isKontext
+      ? `mockups.${tier}.kontextStatus`
+      : isFlux2
+      ? `mockups.${tier}.flux2Status`
+      : `mockups.${tier}.status`;
+    const urlField = isKontext
+      ? `mockups.${tier}.kontextUrl`
+      : isFlux2
+      ? `mockups.${tier}.flux2Url`
+      : `mockups.${tier}.imageUrl`;
+
     // Mark as generating
     await consultRef.update({
-      [`mockups.${tier}.status`]: "generating",
+      [statusField]: "generating",
       updatedAt: FieldValue.serverTimestamp(),
     });
 
     try {
       // Check for custom prompts in platformConfig
-      let prompt: string;
       const promptDoc = await db
         .collection(GS_COLLECTIONS.PLATFORM_CONFIG)
         .doc("consultationPrompts")
         .get();
       const customPrompts = promptDoc.exists ? promptDoc.data() : null;
 
-      if (customPrompts?.[serviceType]?.[tier]) {
-        prompt = customPrompts[serviceType][tier];
-      } else {
-        prompt = buildPrompt(serviceType, tier, doc);
-      }
-
-      console.log(`[Mockup ${consultationId}/${tier}] Prompt: ${prompt}`);
-
-      // Call fal.ai FLUX.1 [pro] Fill
-      const falResponse = await fetch("https://fal.run/fal-ai/flux-pro/v1/fill", {
-        method: "POST",
-        headers: {
-          Authorization: `Key ${falApiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          image_url: widePhotoUrl,
-          prompt,
-          num_images: 1,
-        }),
-      });
-
-      if (!falResponse.ok) {
-        const errText = await falResponse.text();
-        throw new Error(`fal.ai returned ${falResponse.status}: ${errText}`);
-      }
-
-      const falResult = await falResponse.json();
-      const generatedUrl = falResult.images?.[0]?.url;
-
-      if (!generatedUrl) {
-        throw new Error("fal.ai did not return an image URL");
-      }
-
-      // Download the generated image and upload to Firebase Storage
-      const imageResponse = await fetch(generatedUrl);
-      if (!imageResponse.ok) throw new Error("Failed to download generated image");
-      const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
-
+      let generatedUrl: string;
       const timestamp = Date.now();
-      const storagePath = `gs_consultation_mockups/${consultationId}/${tier}_${timestamp}.png`;
-      const bucket = storage.bucket();
-      const file = bucket.file(storagePath);
+      const modeSuffix = genMode === "classic" ? "" : `_${genMode.replace("-", "")}`;
 
-      await file.save(imageBuffer, {
-        metadata: { contentType: "image/png" },
-      });
+      if (genMode === "kontext-2pass") {
+        // ═══ OPTION A: Kontext 2-Pass (Paint → Storage) ═══
+        console.log(`[Mockup ${consultationId}/${tier}/kontext] Starting 2-pass generation...`);
 
-      // Make publicly readable and get download URL
-      await file.makePublic();
-      const imageUrl = `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
+        // Pass 1: Paint walls + ceiling + clean up
+        const paintPrompt = customPrompts?.[serviceType]?.[`${tier}_paint`]
+          || buildPaintPrompt(doc);
+        console.log(`[Kontext Pass 1] Paint prompt: ${paintPrompt}`);
+        const paintedUrl = await callKontext(widePhotoUrl, paintPrompt, falApiKey);
+        console.log(`[Kontext Pass 1] Done — painted image ready`);
 
-      // Update Firestore with the result
+        // Pass 2: Add storage systems to the painted garage
+        let storagePrompt: string;
+        if (serviceType === "gym_install") {
+          storagePrompt = customPrompts?.[serviceType]?.[`${tier}_storage`]
+            || buildGymInstallPrompt(tier, doc);
+        } else {
+          storagePrompt = customPrompts?.[serviceType]?.[`${tier}_storage`]
+            || buildStoragePrompt(tier, doc);
+        }
+        console.log(`[Kontext Pass 2] Storage prompt: ${storagePrompt}`);
+        generatedUrl = await callKontext(paintedUrl, storagePrompt, falApiKey);
+        console.log(`[Kontext Pass 2] Done — final image ready`);
+
+      } else if (genMode === "flux2-edit") {
+        // ═══ OPTION B: FLUX.2 Pro Edit (Single powerful pass) ═══
+        let prompt: string;
+        if (customPrompts?.[serviceType]?.[tier]) {
+          prompt = customPrompts[serviceType][tier];
+        } else if (serviceType === "gym_install") {
+          prompt = buildGymInstallPrompt(tier, doc);
+        } else {
+          prompt = buildFullLuxuryPrompt(tier, doc);
+        }
+
+        console.log(`[Mockup ${consultationId}/${tier}/flux2] Prompt: ${prompt}`);
+        generatedUrl = await callFlux2Edit(widePhotoUrl, prompt, falApiKey);
+        console.log(`[FLUX.2 Edit] Done — image ready`);
+
+      } else {
+        // ═══ Classic FLUX.1 Fill (original behavior) ═══
+        let prompt: string;
+        if (customPrompts?.[serviceType]?.[tier]) {
+          prompt = customPrompts[serviceType][tier];
+        } else if (serviceType === "gym_install") {
+          prompt = buildGymInstallPrompt(tier, doc);
+        } else {
+          prompt = buildFullLuxuryPrompt(tier, doc);
+        }
+
+        console.log(`[Mockup ${consultationId}/${tier}/classic] Prompt: ${prompt}`);
+        generatedUrl = await callClassicFill(widePhotoUrl, prompt, falApiKey);
+      }
+
+      // Upload to Firebase Storage
+      const storagePath = `gs_consultation_mockups/${consultationId}/${tier}${modeSuffix}_${timestamp}.png`;
+      const imageUrl = await downloadAndUpload(generatedUrl, storagePath);
+
+      // Update Firestore
       await consultRef.update({
-        [`mockups.${tier}.status`]: "ready",
-        [`mockups.${tier}.imageUrl`]: imageUrl,
+        [statusField]: "ready",
+        [urlField]: imageUrl,
         updatedAt: FieldValue.serverTimestamp(),
       });
 
-      // Check if all tiers are done — if so, mark consultation as ready
+      // Check if all tiers are done for this mode — if so, mark consultation as ready
       const updatedSnap = await consultRef.get();
       const updatedDoc = updatedSnap.data()!;
-      const allReady = ["tier1", "tier2", "tier3"].every(
-        (t) => updatedDoc.mockups?.[t]?.status === "ready"
-      );
-      if (allReady) {
-        await consultRef.update({ status: "ready" });
+
+      if (genMode === "classic") {
+        const allReady = ["tier1", "tier2", "tier3"].every(
+          (t) => updatedDoc.mockups?.[t]?.status === "ready"
+        );
+        if (allReady) await consultRef.update({ status: "ready" });
       }
 
-      return { tier, imageUrl };
+      return { tier, mode: genMode, imageUrl };
+
     } catch (err: any) {
-      console.error(`Mockup generation failed for ${consultationId}/${tier}:`, err);
+      console.error(`Mockup generation failed for ${consultationId}/${tier}/${genMode}:`, err);
 
       await consultRef.update({
-        [`mockups.${tier}.status`]: "failed",
+        [statusField]: "failed",
         updatedAt: FieldValue.serverTimestamp(),
       });
 
-      throw new HttpsError("internal", `Mockup generation failed: ${err.message}`);
+      throw new HttpsError("internal", `Mockup generation failed (${genMode}): ${err.message}`);
     }
   }
 );
 
-// Export package metadata for use in mobile screens
 export { GS_PACKAGES };

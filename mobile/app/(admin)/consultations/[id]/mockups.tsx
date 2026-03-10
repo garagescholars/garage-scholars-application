@@ -37,11 +37,15 @@ const PACKAGES: Record<ConsultationServiceType, Record<string, { name: string; p
 const TIERS = ["tier1", "tier2", "tier3"] as const;
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
+type ViewMode = "kontext" | "flux2" | "classic";
+
 export default function MockupsPresentation() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [consultation, setConsultation] = useState<GsConsultation | null>(null);
   const [fullscreenTier, setFullscreenTier] = useState<string | null>(null);
+  const [fullscreenMode, setFullscreenMode] = useState<ViewMode>("kontext");
   const [sharing, setSharing] = useState(false);
+  const [activeMode, setActiveMode] = useState<ViewMode>("kontext");
 
   useEffect(() => {
     if (!id) return;
@@ -53,7 +57,7 @@ export default function MockupsPresentation() {
     return unsub;
   }, [id]);
 
-  const handleShare = async (imageUrl: string, tierName: string) => {
+  const handleShare = async (imageUrl: string, _tierName: string) => {
     setSharing(true);
     try {
       const file = new ExpoFile(Paths.cache, `mockup_${Date.now()}.png`);
@@ -86,6 +90,39 @@ export default function MockupsPresentation() {
   const pkgs = PACKAGES[serviceType];
   const beforeUri = consultation.spacePhotoUrls?.wide;
 
+  // Determine if dual-mode results exist
+  const hasDualMode = TIERS.some((t) => {
+    const m = consultation.mockups?.[t] as any;
+    return m?.kontextStatus || m?.flux2Status;
+  });
+
+  // Helper to get the image URL and status for a tier based on active mode
+  const getMockupData = (tier: string, mode: ViewMode) => {
+    const m = consultation.mockups?.[tier as keyof typeof consultation.mockups] as any;
+    if (!m) return { status: "idle" as const, imageUrl: null };
+
+    if (mode === "kontext") {
+      return {
+        status: (m.kontextStatus || m.status || "idle") as string,
+        imageUrl: m.kontextUrl || m.imageUrl || null,
+      };
+    } else if (mode === "flux2") {
+      return {
+        status: (m.flux2Status || "idle") as string,
+        imageUrl: m.flux2Url || null,
+      };
+    }
+    // classic
+    return {
+      status: (m.status || "idle") as string,
+      imageUrl: m.imageUrl || null,
+    };
+  };
+
+  // Count ready mockups per mode
+  const countReady = (mode: ViewMode) =>
+    TIERS.filter((t) => getMockupData(t, mode).status === "ready").length;
+
   return (
     <View style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
@@ -95,12 +132,35 @@ export default function MockupsPresentation() {
           {serviceType === "garage_org" ? "Garage Organization" : "Home Gym Installation"} — {consultation.address}
         </Text>
 
+        {/* Mode Toggle (only shown for dual-mode) */}
+        {hasDualMode && (
+          <View style={styles.modeToggleRow}>
+            <TouchableOpacity
+              style={[styles.modeTab, activeMode === "kontext" && styles.modeTabActive]}
+              onPress={() => setActiveMode("kontext")}
+            >
+              <Text style={[styles.modeTabText, activeMode === "kontext" && styles.modeTabTextActive]}>
+                Kontext 2-Pass
+              </Text>
+              <Text style={styles.modeReadyCount}>{countReady("kontext")}/3</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modeTab, activeMode === "flux2" && styles.modeTabActive]}
+              onPress={() => setActiveMode("flux2")}
+            >
+              <Text style={[styles.modeTabText, activeMode === "flux2" && styles.modeTabTextActive]}>
+                FLUX.2 Pro Edit
+              </Text>
+              <Text style={styles.modeReadyCount}>{countReady("flux2")}/3</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Tier Cards */}
         {TIERS.map((tier) => {
           const pkg = pkgs[tier];
-          const mockup = consultation.mockups?.[tier];
-          const status = mockup?.status || "idle";
-          const imageUrl = mockup?.imageUrl;
+          const displayMode = hasDualMode ? activeMode : "classic";
+          const { status, imageUrl } = getMockupData(tier, displayMode);
 
           return (
             <View key={tier} style={styles.tierCard}>
@@ -128,7 +188,10 @@ export default function MockupsPresentation() {
               ) : imageUrl && beforeUri ? (
                 <TouchableOpacity
                   activeOpacity={0.9}
-                  onPress={() => setFullscreenTier(tier)}
+                  onPress={() => {
+                    setFullscreenTier(tier);
+                    setFullscreenMode(displayMode);
+                  }}
                 >
                   <BeforeAfterSlider
                     beforeUri={beforeUri}
@@ -137,6 +200,20 @@ export default function MockupsPresentation() {
                   />
                 </TouchableOpacity>
               ) : null}
+
+              {/* Mode comparison badges */}
+              {hasDualMode && status === "ready" && (
+                <View style={styles.modeBadgeRow}>
+                  <View style={[styles.modeBadge, activeMode === "kontext" && styles.modeBadgeActive]}>
+                    <View style={[styles.modeDot, { backgroundColor: "#6366f1" }]} />
+                    <Text style={styles.modeBadgeText}>Kontext</Text>
+                  </View>
+                  <View style={[styles.modeBadge, activeMode === "flux2" && styles.modeBadgeActive]}>
+                    <View style={[styles.modeDot, { backgroundColor: "#f59e0b" }]} />
+                    <Text style={styles.modeBadgeText}>FLUX.2</Text>
+                  </View>
+                </View>
+              )}
 
               {/* Share single tier */}
               {status === "ready" && imageUrl && (
@@ -160,14 +237,13 @@ export default function MockupsPresentation() {
         <TouchableOpacity
           style={styles.shareAllBtn}
           onPress={() => {
-            const readyMockup = TIERS.find(
-              (t) => consultation.mockups?.[t]?.status === "ready" && consultation.mockups?.[t]?.imageUrl
+            const displayMode = hasDualMode ? activeMode : "classic";
+            const readyTier = TIERS.find(
+              (t) => getMockupData(t, displayMode).status === "ready" && getMockupData(t, displayMode).imageUrl
             );
-            if (readyMockup && consultation.mockups?.[readyMockup]?.imageUrl) {
-              handleShare(
-                consultation.mockups[readyMockup].imageUrl!,
-                pkgs[readyMockup].name
-              );
+            if (readyTier) {
+              const { imageUrl } = getMockupData(readyTier, displayMode);
+              handleShare(imageUrl!, pkgs[readyTier].name);
             } else {
               Alert.alert("No mockups ready", "Wait for at least one mockup to finish generating.");
             }
@@ -180,26 +256,35 @@ export default function MockupsPresentation() {
       </View>
 
       {/* Fullscreen modal */}
-      {fullscreenTier && beforeUri && consultation.mockups?.[fullscreenTier as keyof typeof consultation.mockups]?.imageUrl && (
-        <Modal visible transparent animationType="fade">
-          <View style={styles.fullscreenModal}>
-            <TouchableOpacity
-              style={styles.fullscreenClose}
-              onPress={() => setFullscreenTier(null)}
-            >
-              <Ionicons name="close" size={28} color="#fff" />
-            </TouchableOpacity>
-            <Text style={styles.fullscreenTitle}>
-              {pkgs[fullscreenTier as keyof typeof pkgs].name} — {pkgs[fullscreenTier as keyof typeof pkgs].price}
-            </Text>
-            <BeforeAfterSlider
-              beforeUri={beforeUri}
-              afterUri={consultation.mockups[fullscreenTier as keyof typeof consultation.mockups].imageUrl!}
-              height={SCREEN_WIDTH * 0.75}
-            />
-          </View>
-        </Modal>
-      )}
+      {fullscreenTier && beforeUri && (() => {
+        const { imageUrl } = getMockupData(fullscreenTier, fullscreenMode);
+        if (!imageUrl) return null;
+        return (
+          <Modal visible transparent animationType="fade">
+            <View style={styles.fullscreenModal}>
+              <TouchableOpacity
+                style={styles.fullscreenClose}
+                onPress={() => setFullscreenTier(null)}
+              >
+                <Ionicons name="close" size={28} color="#fff" />
+              </TouchableOpacity>
+              <Text style={styles.fullscreenTitle}>
+                {pkgs[fullscreenTier as keyof typeof pkgs].name} — {pkgs[fullscreenTier as keyof typeof pkgs].price}
+              </Text>
+              {hasDualMode && (
+                <Text style={styles.fullscreenModeLabel}>
+                  {fullscreenMode === "kontext" ? "Kontext 2-Pass" : "FLUX.2 Pro Edit"}
+                </Text>
+              )}
+              <BeforeAfterSlider
+                beforeUri={beforeUri}
+                afterUri={imageUrl}
+                height={SCREEN_WIDTH * 0.75}
+              />
+            </View>
+          </Modal>
+        );
+      })()}
     </View>
   );
 }
@@ -226,7 +311,43 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   clientName: { fontSize: 22, fontWeight: "700", color: colors.text.primary },
-  subtitle: { fontSize: 14, color: colors.text.secondary, marginTop: 4, marginBottom: 20 },
+  subtitle: { fontSize: 14, color: colors.text.secondary, marginTop: 4, marginBottom: 12 },
+  // Mode toggle
+  modeToggleRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 16,
+  },
+  modeTab: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: colors.bg.card,
+    borderWidth: 1.5,
+    borderColor: "transparent",
+  },
+  modeTabActive: {
+    borderColor: colors.brand.teal,
+    backgroundColor: `${colors.brand.teal}10`,
+  },
+  modeTabText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.text.muted,
+  },
+  modeTabTextActive: {
+    color: colors.brand.teal,
+  },
+  modeReadyCount: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.text.muted,
+  },
+  // Tier cards
   tierCard: {
     backgroundColor: colors.bg.card,
     borderRadius: 14,
@@ -266,6 +387,35 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   failedText: { fontSize: 13, fontWeight: "600", color: colors.status.error },
+  // Mode comparison badges
+  modeBadgeRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 10,
+    justifyContent: "center",
+  },
+  modeBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    backgroundColor: `${colors.text.muted}15`,
+  },
+  modeBadgeActive: {
+    backgroundColor: `${colors.brand.teal}20`,
+  },
+  modeDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  modeBadgeText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: colors.text.secondary,
+  },
   shareOneBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -325,6 +475,13 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#fff",
     textAlign: "center",
-    marginBottom: 20,
+    marginBottom: 6,
+  },
+  fullscreenModeLabel: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.brand.teal,
+    textAlign: "center",
+    marginBottom: 16,
   },
 });

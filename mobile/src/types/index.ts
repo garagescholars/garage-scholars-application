@@ -685,6 +685,11 @@ export type MockupStatus = "idle" | "generating" | "ready" | "failed";
 export type MockupTier = {
   status: MockupStatus;
   imageUrl: string | null;
+  // Dual-mode parallel generation results
+  kontextStatus?: MockupStatus;
+  kontextUrl?: string | null;
+  flux2Status?: MockupStatus;
+  flux2Url?: string | null;
 };
 
 // Space context types
@@ -699,6 +704,10 @@ export type OverheadOption = "none" | "2-racks" | "4-racks";
 export type CabinetOption = "none" | "basic-wire" | "premium-newage";
 export type WallOrgOption = "none" | "pegboard" | "slatwall";
 export type GarageFlooringType = "none" | "polyaspartic" | "click-in-plate";
+export type BikeRackOption = "none" | "wall-2" | "wall-4";
+
+// Generation mode for consultation mockups
+export type GenerationMode = "kontext-2pass" | "flux2-edit" | "both";
 
 // Gym addon option types
 export type GymFlooringType = "none" | "stall-mats" | "rubber-tiles";
@@ -744,7 +753,11 @@ export type GsConsultation = {
     wallOrg: WallOrgOption;
     flooringType: GarageFlooringType;
     flooringColor: BMColorRef;
+    bikeRack: BikeRackOption;
   };
+
+  // Generation mode preference
+  generationMode?: GenerationMode;
 
   gymAddons: {
     flooringType: GymFlooringType;
