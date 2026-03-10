@@ -687,6 +687,29 @@ export type MockupTier = {
   imageUrl: string | null;
 };
 
+// Space context types
+export type GarageSize = "1-car" | "2-car" | "3-car" | "oversized";
+export type CeilingHeight = "8ft" | "9ft" | "10ft+" | "open-joists";
+export type CurrentState = "empty" | "cluttered" | "partial-storage" | "cars-parked";
+export type StylePreference = "clean-modern" | "workshop" | "minimalist";
+
+// Garage addon option types
+export type ShelvingOption = "none" | "1-unit" | "2-units" | "3-units";
+export type OverheadOption = "none" | "2-racks" | "4-racks";
+export type CabinetOption = "none" | "basic-wire" | "premium-newage";
+export type WallOrgOption = "none" | "pegboard" | "slatwall";
+export type GarageFlooringType = "none" | "polyaspartic" | "click-in-plate";
+
+// Gym addon option types
+export type GymFlooringType = "none" | "stall-mats" | "rubber-tiles";
+export type RackOption = "none" | "wall-mount" | "half-rack" | "full-power-cage";
+export type BenchOption = "none" | "flat" | "adjustable-fid";
+export type CableOption = "none" | "single-stack" | "functional-trainer" | "crossover";
+export type GymAccessory = "mirrors" | "pull-up-rig" | "dumbbell-rack" | "kettlebells";
+
+// Benjamin Moore color reference (stored on Firestore doc)
+export type BMColorRef = { code: string; name: string } | null;
+
 export type GsConsultation = {
   id: string;
   clientName: string;
@@ -699,6 +722,14 @@ export type GsConsultation = {
 
   serviceType: ConsultationServiceType;
 
+  // Space context (for smarter AI prompts)
+  garageSize?: GarageSize;
+  ceilingHeight?: CeilingHeight;
+  currentState?: CurrentState[];
+  itemsToPreserve?: string;
+  stylePreference?: StylePreference;
+  dreamDescription?: string;
+
   spacePhotoUrls: {
     wide: string;
     left?: string;
@@ -707,18 +738,21 @@ export type GsConsultation = {
   };
 
   garageAddons: {
-    polyasparticFlooring: boolean;
-    flooringColor: "gray" | "tan" | "charcoal" | "blue" | null;
-    overheadStorage: boolean;
-    extraShelving: boolean;
+    shelving: ShelvingOption;
+    overheadStorage: OverheadOption;
+    cabinets: CabinetOption;
+    wallOrg: WallOrgOption;
+    flooringType: GarageFlooringType;
+    flooringColor: BMColorRef;
   };
 
   gymAddons: {
-    rubberFlooring: boolean;
-    flooringColor: "black" | "gray" | "blue" | null;
-    mirrorWall: boolean;
-    cableSystem: boolean;
-    pullUpRig: boolean;
+    flooringType: GymFlooringType;
+    flooringColor: BMColorRef;
+    rackSystem: RackOption;
+    bench: BenchOption;
+    cableMachine: CableOption;
+    accessories: GymAccessory[];
   };
 
   mockups: {

@@ -114,6 +114,15 @@ export default function GuidedItemCapture({
   const isAllCaptured = angles.every((a) => photos[a.key]);
   const currentAngle = angles[currentStep];
 
+  const handlePhotoCaptured = (uri: string) => {
+    setPhotos((prev) => ({ ...prev, [currentAngle.key]: uri }));
+    if (currentStep < angles.length - 1) {
+      setCurrentStep(currentStep + 1);
+    } else {
+      setShowReview(true);
+    }
+  };
+
   const capturePhoto = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== "granted") {
@@ -129,23 +138,40 @@ export default function GuidedItemCapture({
       });
 
       if (!result.canceled && result.assets[0]) {
-        const uri = result.assets[0].uri;
-        setPhotos((prev) => ({ ...prev, [currentAngle.key]: uri }));
-
-        if (currentStep < angles.length - 1) {
-          setCurrentStep(currentStep + 1);
-        } else {
-          setShowReview(true);
-        }
+        handlePhotoCaptured(result.assets[0].uri);
       }
     } catch (err: any) {
       Alert.alert("Error", err.message || "Failed to take photo");
     }
   };
 
+  const chooseFromLibrary = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert("Permission Needed", "Photo library access is required.");
+      return;
+    }
+
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        quality: 0.8,
+        allowsEditing: false,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        handlePhotoCaptured(result.assets[0].uri);
+      }
+    } catch (err: any) {
+      Alert.alert("Error", err.message || "Failed to pick photo");
+    }
+  };
+
   const retakePhoto = (key: string) => {
     const idx = angles.findIndex((a) => a.key === key);
-    if (idx >= 0) {
+    if (idx < 0) return;
+
+    const doRetake = (source: "camera" | "library") => {
       setPhotos((prev) => {
         const updated = { ...prev };
         delete updated[key];
@@ -153,7 +179,14 @@ export default function GuidedItemCapture({
       });
       setCurrentStep(idx);
       setShowReview(false);
-    }
+      // After state update, launch picker on next render via the capture buttons
+    };
+
+    Alert.alert("Retake Photo", `Retake "${angles[idx].label}"`, [
+      { text: "Camera", onPress: () => doRetake("camera") },
+      { text: "Photo Library", onPress: () => doRetake("library") },
+      { text: "Cancel", style: "cancel" },
+    ]);
   };
 
   const addExtraPhoto = async () => {
@@ -308,6 +341,11 @@ export default function GuidedItemCapture({
           </Text>
         </TouchableOpacity>
 
+        <TouchableOpacity style={styles.libraryBtn} onPress={chooseFromLibrary}>
+          <Ionicons name="images-outline" size={22} color="#14b8a6" />
+          <Text style={styles.libraryText}>Library</Text>
+        </TouchableOpacity>
+
         {photos[currentAngle.key] && currentStep < angles.length - 1 && (
           <TouchableOpacity
             style={styles.navBtn}
@@ -429,6 +467,22 @@ const styles = StyleSheet.create({
   captureText: {
     color: "#fff",
     fontSize: 16,
+    fontWeight: "700",
+  },
+  libraryBtn: {
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderWidth: 1.5,
+    borderColor: "#14b8a6",
+    backgroundColor: "transparent",
+  },
+  libraryText: {
+    color: "#14b8a6",
+    fontSize: 14,
     fontWeight: "700",
   },
   navBtn: {

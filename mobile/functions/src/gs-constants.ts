@@ -96,7 +96,7 @@ export const GS_PACKAGES = {
   // Garage Organization
   undergraduate: { name: "The Undergraduate", category: "Garage Organization", price: 1197, type: "one_time" as const },
   graduate:      { name: "The Graduate",      category: "Garage Organization", price: 2197, type: "one_time" as const },
-  doctorate:     { name: "The Doctorate",     category: "Garage Organization", price: 3697, type: "one_time" as const },
+  doctorate:     { name: "The Doctorate",     category: "Garage Organization", price: 3797, type: "one_time" as const },
   // Home Gym Installation
   warmup:   { name: "Warm Up",   category: "Home Gym Installation", price: 997,  type: "one_time" as const },
   superset: { name: "Super Set", category: "Home Gym Installation", price: 1997, type: "one_time" as const },

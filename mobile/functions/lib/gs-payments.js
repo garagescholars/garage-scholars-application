@@ -18,6 +18,7 @@ const scheduler_1 = require("firebase-functions/v2/scheduler");
 const https_1 = require("firebase-functions/v2/https");
 const firestore_1 = require("firebase-admin/firestore");
 const gs_constants_1 = require("./gs-constants");
+const gs_mercury_1 = require("./gs-mercury");
 const db = (0, firestore_1.getFirestore)();
 // Lazy-load Stripe (only when needed, avoids cold start cost when not processing payments)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -32,6 +33,17 @@ function getStripe() {
         _stripe = new Stripe(key);
     }
     return _stripe;
+}
+// ── Helper: get Mercury config from Firestore platform config ──
+async function getMercuryConfig() {
+    const apiKey = process.env.MERCURY_API_KEY;
+    if (!apiKey)
+        return null;
+    const configSnap = await db.collection(gs_constants_1.GS_COLLECTIONS.PLATFORM_CONFIG).doc("payments").get();
+    const accountId = configSnap.data()?.mercuryAccountId;
+    if (!accountId)
+        return null;
+    return { apiKey, accountId };
 }
 // ── Helper: send admin notification via Firestore mail collection ──
 async function notifyAdmins(subject, body) {
@@ -748,9 +760,29 @@ exports.gsCreateRetentionSubscription = (0, https_1.onCall)({ cors: true, timeou
     if (!profileSnap.exists || profileSnap.data()?.role !== "admin") {
         throw new https_1.HttpsError("permission-denied", "Admin role required.");
     }
-    const { customerId, customerName, customerEmail, monthlyAmount, description } = request.data;
-    if (!customerId || !customerName || !customerEmail || !monthlyAmount) {
-        throw new https_1.HttpsError("invalid-argument", "customerId, customerName, customerEmail, and monthlyAmount are required.");
+    const { customerId, customerName, customerEmail, packageKey, monthlyAmount, description } = request.data;
+    if (!customerId || !customerName || !customerEmail) {
+        throw new https_1.HttpsError("invalid-argument", "customerId, customerName, and customerEmail are required.");
+    }
+    if (!packageKey && !monthlyAmount) {
+        throw new https_1.HttpsError("invalid-argument", "Either packageKey or monthlyAmount is required.");
+    }
+    // Resolve package details
+    let resolvedPriceId = null;
+    let resolvedAmount;
+    let resolvedDescription;
+    if (packageKey) {
+        const pkg = gs_constants_1.GS_PACKAGES[packageKey];
+        if (!pkg || pkg.type !== "recurring") {
+            throw new https_1.HttpsError("invalid-argument", `${packageKey} is not a valid membership package.`);
+        }
+        resolvedPriceId = gs_constants_1.STRIPE_PRICE_IDS[packageKey] || null;
+        resolvedAmount = pkg.price;
+        resolvedDescription = description || `${pkg.name} — $${pkg.price}/mo`;
+    }
+    else {
+        resolvedAmount = monthlyAmount;
+        resolvedDescription = description || `Monthly retention - $${monthlyAmount}/mo`;
     }
     const stripe = getStripe();
     // Find or create Stripe Customer
@@ -766,40 +798,49 @@ exports.gsCreateRetentionSubscription = (0, https_1.onCall)({ cors: true, timeou
             metadata: { customerId, platform: "garage_scholars" },
         });
     }
-    // Create price for this subscription
-    const price = await stripe.prices.create({
-        unit_amount: Math.round(monthlyAmount * 100),
-        currency: "usd",
-        recurring: { interval: "month" },
-        product_data: {
-            name: `Monthly Retention - ${customerName}`,
-            metadata: { customerId, platform: "garage_scholars" },
-        },
-    });
-    // Create subscription (payment method collected via checkout session or setup intent)
+    // Use pre-created Stripe price or create a custom one
+    let priceId;
+    if (resolvedPriceId) {
+        priceId = resolvedPriceId;
+    }
+    else {
+        const price = await stripe.prices.create({
+            unit_amount: Math.round(resolvedAmount * 100),
+            currency: "usd",
+            recurring: { interval: "month" },
+            product_data: {
+                name: resolvedDescription,
+                metadata: { customerId, platform: "garage_scholars" },
+            },
+        });
+        priceId = price.id;
+    }
+    // Create subscription
     const subscription = await stripe.subscriptions.create({
         customer: stripeCustomer.id,
-        items: [{ price: price.id }],
+        items: [{ price: priceId }],
         payment_behavior: "default_incomplete",
         payment_settings: {
             payment_method_types: ["us_bank_account", "card"],
             save_default_payment_method: "on_subscription",
         },
         expand: ["latest_invoice.payment_intent"],
-        metadata: { customerId, type: "retention_monthly", platform: "garage_scholars" },
+        metadata: { customerId, packageKey: packageKey || "custom", type: "retention_monthly", platform: "garage_scholars" },
     });
     // Record in Firestore
     await db.collection(gs_constants_1.GS_COLLECTIONS.CUSTOMER_PAYMENTS).add({
         customerId,
         customerName,
-        amount: monthlyAmount,
+        customerEmail,
+        amount: resolvedAmount,
         type: "retention_monthly",
+        packageKey: packageKey || null,
         stripeSubscriptionId: subscription.id,
         paymentMethod: "ach",
         convenienceFee: 0,
-        totalCharged: monthlyAmount,
+        totalCharged: resolvedAmount,
         status: "pending",
-        description: description || `Monthly retention - $${monthlyAmount}/mo`,
+        description: resolvedDescription,
         createdAt: firestore_1.FieldValue.serverTimestamp(),
     });
     const invoice = subscription.latest_invoice;
@@ -808,12 +849,14 @@ exports.gsCreateRetentionSubscription = (0, https_1.onCall)({ cors: true, timeou
         subscriptionId: subscription.id,
         clientSecret: paymentIntent?.client_secret || null,
         status: subscription.status,
+        packageKey: packageKey || null,
+        amount: resolvedAmount,
     };
 });
 // ═══════════════════════════════════════════════════════════════
 // 8. CALLABLE: Resale payout to customer
 // ═══════════════════════════════════════════════════════════════
-exports.gsResalePayout = (0, https_1.onCall)({ cors: true, timeoutSeconds: 30, secrets: ["STRIPE_SECRET_KEY"] }, async (request) => {
+exports.gsResalePayout = (0, https_1.onCall)({ cors: true, timeoutSeconds: 30, secrets: ["STRIPE_SECRET_KEY", "MERCURY_API_KEY"] }, async (request) => {
     if (!request.auth) {
         throw new https_1.HttpsError("unauthenticated", "Authentication required.");
     }
@@ -821,22 +864,15 @@ exports.gsResalePayout = (0, https_1.onCall)({ cors: true, timeoutSeconds: 30, s
     if (!profileSnap.exists || profileSnap.data()?.role !== "admin") {
         throw new https_1.HttpsError("permission-denied", "Admin role required.");
     }
-    const { customerId, customerName, amount, description, jobId } = request.data;
+    const { customerId, customerName, customerEmail, amount, description, jobId, bankRouting, bankAccount, bankAccountType } = request.data;
     if (!customerId || !amount) {
         throw new https_1.HttpsError("invalid-argument", "customerId and amount are required.");
     }
-    // Check customer has Stripe Connect
-    const stripeAccSnap = await db
-        .collection(gs_constants_1.GS_COLLECTIONS.STRIPE_ACCOUNTS)
-        .where("userId", "==", customerId)
-        .where("accountType", "==", "resale_customer")
-        .where("payoutsEnabled", "==", true)
-        .limit(1)
-        .get();
     const payoutRef = db.collection(gs_constants_1.GS_COLLECTIONS.PAYOUTS).doc();
     const payoutData = {
         jobId: jobId || null,
         customerId,
+        customerEmail: customerEmail || null,
         recipientName: customerName || "Customer",
         amount,
         splitType: "resale",
@@ -847,33 +883,53 @@ exports.gsResalePayout = (0, https_1.onCall)({ cors: true, timeoutSeconds: 30, s
         notes: description || "Resale payout",
         createdAt: firestore_1.FieldValue.serverTimestamp(),
     };
-    if (!stripeAccSnap.empty) {
-        const stripeAccountId = stripeAccSnap.docs[0].data().stripeAccountId;
-        try {
-            const stripe = getStripe();
-            const transfer = await stripe.transfers.create({
-                amount: Math.round(amount * 100),
-                currency: "usd",
-                destination: stripeAccountId,
-                description: description || `Resale payout to ${customerName}`,
-                metadata: { customerId, splitType: "resale", platform: "garage_scholars" },
-            });
-            payoutData.stripeTransferId = transfer.id;
-            payoutData.status = "processing";
-            payoutData.paymentMethod = "stripe_ach";
-        }
-        catch (err) {
-            console.error(`Stripe resale transfer failed:`, err);
-            payoutData.notes += ` | Stripe failed: ${err.message}`;
-        }
+    // Try Mercury ACH if bank details provided
+    const mercury = await getMercuryConfig();
+    if (mercury && bankRouting && bankAccount) {
+        const result = await (0, gs_mercury_1.sendMercuryPayout)(mercury.apiKey, mercury.accountId, { name: customerName, routingNumber: bankRouting, accountNumber: bankAccount, accountType: bankAccountType || "checking" }, amount, description || `Resale payout to ${customerName}`);
+        payoutData.status = result.status;
+        payoutData.paymentMethod = result.method;
+        if (result.transferId)
+            payoutData.mercuryTransferId = result.transferId;
+        if (result.error)
+            payoutData.notes += ` | ${result.error}`;
     }
     await payoutRef.set(payoutData);
-    if (payoutData.status === "pending") {
-        await notifyAdmins(`💰 Resale Payout Required: $${amount}`, `<p>Resale payout to <strong>${customerName}</strong>: <strong>$${amount}</strong></p>
-         <p>${description || "No description"}</p>
-         <p>Customer does not have Stripe set up — please pay manually.</p>`);
+    // Email the resale customer
+    if (customerEmail) {
+        const paymentMethodLabel = payoutData.paymentMethod === "mercury_ach"
+            ? "ACH bank transfer (arrives in 1–2 business days)"
+            : "Zelle or Venmo (you will receive a separate notification)";
+        await db.collection("mail").add({
+            to: [customerEmail],
+            message: {
+                subject: `Your Garage Scholars Resale Payout — $${amount.toFixed(2)}`,
+                html: `
+            <div style="font-family: sans-serif; max-width: 520px; margin: auto;">
+              <h2 style="color: #1a2e1a;">Your item sold! 🎉</h2>
+              <p>Hi ${customerName},</p>
+              <p>Great news — your consignment item has sold and your payout is on the way.</p>
+              <table style="width:100%; border-collapse:collapse; margin: 20px 0;">
+                <tr><td style="padding:8px; color:#555;">Payout Amount</td><td style="padding:8px; font-weight:bold;">$${amount.toFixed(2)}</td></tr>
+                <tr style="background:#f9f9f9;"><td style="padding:8px; color:#555;">Payment Method</td><td style="padding:8px;">${paymentMethodLabel}</td></tr>
+                ${description ? `<tr><td style="padding:8px; color:#555;">Notes</td><td style="padding:8px;">${description}</td></tr>` : ""}
+              </table>
+              <p>Questions? Reply to this email or contact us at <a href="mailto:admin@garagescholars.com">admin@garagescholars.com</a>.</p>
+              <p style="color:#888; font-size:0.85rem;">Garage Scholars · Denver Metro Area</p>
+            </div>
+          `,
+            },
+            createdAt: firestore_1.FieldValue.serverTimestamp(),
+        });
     }
-    return { payoutId: payoutRef.id, status: payoutData.status };
+    // Notify admins if manual payment still needed
+    if (payoutData.status === "pending") {
+        await notifyAdmins(`💰 Resale Payout Required: $${amount} → ${customerName}`, `<p>Resale payout to <strong>${customerName}</strong>: <strong>$${amount.toFixed(2)}</strong></p>
+         <p>${description || "No description"}</p>
+         <p><strong>Action needed:</strong> No bank details on file — please pay via Zelle/Venmo manually, then mark as paid in the app.</p>
+         ${customerEmail ? `<p>Customer email: ${customerEmail}</p>` : ""}`);
+    }
+    return { payoutId: payoutRef.id, status: payoutData.status, paymentMethod: payoutData.paymentMethod };
 });
 // ═══════════════════════════════════════════════════════════════
 // 9. CALLABLE: Admin marks manual payout as paid
@@ -936,26 +992,49 @@ exports.gsGeneratePaymentReport = (0, scheduler_1.onSchedule)("0 8 1,16 * *", as
         .where("paidAt", ">=", startTs)
         .where("paidAt", "<=", endTs)
         .get();
-    // Aggregate by scholar
+    // Get pending payouts (not yet paid — show CPA what's outstanding)
+    const pendingSnap = await db
+        .collection(gs_constants_1.GS_COLLECTIONS.PAYOUTS)
+        .where("status", "in", ["pending", "processing"])
+        .where("createdAt", ">=", startTs)
+        .where("createdAt", "<=", endTs)
+        .get();
     const scholarMap = {};
-    let totalAmount = 0;
+    const resaleMap = {};
+    const methodTotals = {};
+    let scholarTotal = 0;
+    let resaleTotal = 0;
     for (const doc of payoutsSnap.docs) {
         const data = doc.data();
-        const sid = data.scholarId || data.customerId || "unknown";
-        if (!scholarMap[sid]) {
-            scholarMap[sid] = { name: data.recipientName || sid, total: 0, jobCount: 0, payoutIds: [] };
+        const isResale = data.splitType === "resale";
+        const id = data.scholarId || data.customerId || "unknown";
+        const map = isResale ? resaleMap : scholarMap;
+        if (!map[id]) {
+            map[id] = { name: data.recipientName || id, total: 0, jobCount: 0, method: data.paymentMethod || "unknown" };
         }
-        scholarMap[sid].total += data.amount || 0;
-        scholarMap[sid].jobCount += 1;
-        scholarMap[sid].payoutIds.push(doc.id);
-        totalAmount += data.amount || 0;
+        map[id].total += data.amount || 0;
+        map[id].jobCount += 1;
+        const method = data.paymentMethod || "unknown";
+        methodTotals[method] = (methodTotals[method] || 0) + (data.amount || 0);
+        if (isResale)
+            resaleTotal += data.amount || 0;
+        else
+            scholarTotal += data.amount || 0;
     }
+    const totalAmount = scholarTotal + resaleTotal;
     const scholarBreakdowns = Object.entries(scholarMap).map(([scholarId, data]) => ({
         scholarId,
         scholarName: data.name,
         jobCount: data.jobCount,
         totalPaid: Math.round(data.total * 100) / 100,
-        payoutIds: data.payoutIds,
+        paymentMethod: data.method,
+    }));
+    const resaleBreakdowns = Object.entries(resaleMap).map(([customerId, data]) => ({
+        customerId,
+        customerName: data.name,
+        payoutCount: data.jobCount,
+        totalPaid: Math.round(data.total * 100) / 100,
+        paymentMethod: data.method,
     }));
     // Create period doc
     const periodId = `${year}-${String(month + 1).padStart(2, "0")}-${day <= 15 ? "A" : "B"}`;
@@ -965,7 +1044,11 @@ exports.gsGeneratePaymentReport = (0, scheduler_1.onSchedule)("0 8 1,16 * *", as
         endDate: endDate.toISOString().split("T")[0],
         totalPayouts: payoutsSnap.size,
         totalAmount: Math.round(totalAmount * 100) / 100,
+        scholarTotal: Math.round(scholarTotal * 100) / 100,
+        resaleTotal: Math.round(resaleTotal * 100) / 100,
         scholarBreakdowns,
+        resaleBreakdowns,
+        methodTotals,
         status: "closed",
         createdAt: firestore_1.FieldValue.serverTimestamp(),
     });
@@ -975,37 +1058,91 @@ exports.gsGeneratePaymentReport = (0, scheduler_1.onSchedule)("0 8 1,16 * *", as
     const cpaEmail = config?.cpaEmail;
     const autoEmail = config?.cpaAutoEmailEnabled !== false;
     if (cpaEmail && autoEmail) {
-        // Build CSV data
-        const csvLines = [
-            "Scholar Name,Scholar ID,Payout Count,Total Paid,Period Start,Period End",
-            ...scholarBreakdowns.map((s) => `"${s.scholarName}","${s.scholarId}",${s.jobCount},${s.totalPaid},"${startDate.toISOString().split("T")[0]}","${endDate.toISOString().split("T")[0]}"`),
-            `"TOTAL","",${payoutsSnap.size},${Math.round(totalAmount * 100) / 100},"",""`
-        ];
-        const csvContent = csvLines.join("\n");
-        // Build report HTML
-        const tableRows = scholarBreakdowns
+        const fmt = (n) => `$${n.toFixed(2)}`;
+        const periodLabel = `${startDate.toLocaleDateString("en-US")} – ${endDate.toLocaleDateString("en-US")}`;
+        // Scholar rows
+        const scholarRows = scholarBreakdowns
             .sort((a, b) => b.totalPaid - a.totalPaid)
-            .map((s) => `<tr><td>${s.scholarName}</td><td>${s.jobCount}</td><td>$${s.totalPaid.toFixed(2)}</td></tr>`)
+            .map((s) => `<tr><td>${s.scholarName}</td><td>${s.jobCount}</td><td>${s.paymentMethod}</td><td><strong>${fmt(s.totalPaid)}</strong></td></tr>`)
             .join("");
+        // Resale rows
+        const resaleRows = resaleBreakdowns
+            .sort((a, b) => b.totalPaid - a.totalPaid)
+            .map((r) => `<tr><td>${r.customerName}</td><td>${r.payoutCount}</td><td>${r.paymentMethod}</td><td><strong>${fmt(r.totalPaid)}</strong></td></tr>`)
+            .join("");
+        // Pending rows
+        const pendingRows = pendingSnap.docs
+            .map((d) => d.data())
+            .map((p) => `<tr><td>${p.recipientName || "—"}</td><td>${p.splitType || "—"}</td><td>${fmt(p.amount || 0)}</td><td style="color:#e65c00;">${p.status}</td></tr>`)
+            .join("");
+        // Method breakdown
+        const methodRows = Object.entries(methodTotals)
+            .map(([m, t]) => `<tr><td>${m}</td><td>${fmt(t)}</td></tr>`)
+            .join("");
+        // CSV — scholar payouts
+        const scholarCsv = [
+            "TYPE,Recipient,Count,Method,Total Paid,Period Start,Period End",
+            ...scholarBreakdowns.map((s) => `"scholar","${s.scholarName}",${s.jobCount},"${s.paymentMethod}",${s.totalPaid},"${startDate.toISOString().split("T")[0]}","${endDate.toISOString().split("T")[0]}"`),
+            ...resaleBreakdowns.map((r) => `"resale","${r.customerName}",${r.payoutCount},"${r.paymentMethod}",${r.totalPaid},"${startDate.toISOString().split("T")[0]}","${endDate.toISOString().split("T")[0]}"`),
+            `"TOTAL","",${payoutsSnap.size},"",${totalAmount.toFixed(2)},"",""`
+        ].join("\n");
+        const tableStyle = `border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse; width:100%; margin-bottom:24px;"`;
+        const thStyle = `style="background:#1a2e1a; color:#fff; text-align:left;"`;
         const reportHtml = `
-      <h2>Garage Scholars — Biweekly Payment Report</h2>
-      <p><strong>Period:</strong> ${startDate.toLocaleDateString()} – ${endDate.toLocaleDateString()}</p>
-      <p><strong>Total Payouts:</strong> ${payoutsSnap.size}</p>
-      <p><strong>Total Amount:</strong> $${totalAmount.toFixed(2)}</p>
-      <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;">
-        <thead><tr><th>Scholar</th><th>Payouts</th><th>Total</th></tr></thead>
-        <tbody>${tableRows}</tbody>
-        <tfoot><tr><th>TOTAL</th><th>${payoutsSnap.size}</th><th>$${totalAmount.toFixed(2)}</th></tr></tfoot>
-      </table>
-      <br><p>CSV data attached below:</p>
-      <pre>${csvContent}</pre>
-      <p><em>All workers are 1099 independent contractors.</em></p>
+      <div style="font-family: sans-serif; max-width: 700px; margin: auto; color: #1a2e1a;">
+        <h2 style="border-bottom: 2px solid #1a2e1a; padding-bottom: 8px;">Garage Scholars — Biweekly Payment Report</h2>
+        <p><strong>Period:</strong> ${periodLabel}</p>
+
+        <table ${tableStyle}>
+          <tr><td style="padding:8px;"><strong>Total Paid Out</strong></td><td><strong>${fmt(totalAmount)}</strong></td></tr>
+          <tr style="background:#f5f5f5;"><td style="padding:8px;">Scholar Payouts</td><td>${fmt(scholarTotal)}</td></tr>
+          <tr><td style="padding:8px;">Resale Customer Payouts</td><td>${fmt(resaleTotal)}</td></tr>
+          <tr style="background:#f5f5f5;"><td style="padding:8px;">Pending (not yet paid)</td><td style="color:#e65c00;">${fmt(pendingSnap.docs.reduce((s, d) => s + (d.data().amount || 0), 0))}</td></tr>
+        </table>
+
+        <h3>Scholar Payouts (1099 Workers)</h3>
+        ${scholarBreakdowns.length > 0 ? `
+        <table ${tableStyle}>
+          <thead><tr ${thStyle}><th style="padding:8px;">Scholar</th><th style="padding:8px;">Payouts</th><th style="padding:8px;">Method</th><th style="padding:8px;">Total</th></tr></thead>
+          <tbody>${scholarRows}</tbody>
+          <tfoot><tr><td colspan="3"><strong>TOTAL</strong></td><td><strong>${fmt(scholarTotal)}</strong></td></tr></tfoot>
+        </table>` : "<p><em>No scholar payouts this period.</em></p>"}
+
+        <h3>Resale Customer Payouts</h3>
+        ${resaleBreakdowns.length > 0 ? `
+        <table ${tableStyle}>
+          <thead><tr ${thStyle}><th style="padding:8px;">Customer</th><th style="padding:8px;">Payouts</th><th style="padding:8px;">Method</th><th style="padding:8px;">Total</th></tr></thead>
+          <tbody>${resaleRows}</tbody>
+          <tfoot><tr><td colspan="3"><strong>TOTAL</strong></td><td><strong>${fmt(resaleTotal)}</strong></td></tr></tfoot>
+        </table>` : "<p><em>No resale payouts this period.</em></p>"}
+
+        ${pendingSnap.size > 0 ? `
+        <h3 style="color:#e65c00;">⏳ Pending Payouts (Outstanding)</h3>
+        <table ${tableStyle}>
+          <thead><tr ${thStyle}><th style="padding:8px;">Recipient</th><th style="padding:8px;">Type</th><th style="padding:8px;">Amount</th><th style="padding:8px;">Status</th></tr></thead>
+          <tbody>${pendingRows}</tbody>
+        </table>` : ""}
+
+        <h3>Payment Method Breakdown</h3>
+        <table ${tableStyle}>
+          <thead><tr ${thStyle}><th style="padding:8px;">Method</th><th style="padding:8px;">Total</th></tr></thead>
+          <tbody>${methodRows}</tbody>
+        </table>
+
+        <h3>Raw CSV Data</h3>
+        <pre style="background:#f5f5f5; padding:12px; font-size:0.8rem; overflow:auto;">${scholarCsv}</pre>
+
+        <p style="color:#888; font-size:0.85rem; border-top:1px solid #ddd; padding-top:12px;">
+          All workers are 1099 independent contractors. This report covers paid payouts only.
+          Generated automatically by Garage Scholars on ${new Date().toLocaleDateString("en-US")}.
+        </p>
+      </div>
     `;
         await db.collection("mail").add({
             to: [cpaEmail],
             cc: ["garagescholars@gmail.com"],
             message: {
-                subject: `📊 GS Payment Report: ${startDate.toLocaleDateString()} – ${endDate.toLocaleDateString()}`,
+                subject: `📊 GS Payment Report: ${periodLabel} — ${fmt(totalAmount)} paid out`,
                 html: reportHtml,
             },
             createdAt: firestore_1.FieldValue.serverTimestamp(),
@@ -1117,7 +1254,7 @@ exports.gsCreateInvoice = (0, https_1.onCall)({ cors: true, timeoutSeconds: 30, 
     if (!profileSnap.exists || profileSnap.data()?.role !== "admin") {
         throw new https_1.HttpsError("permission-denied", "Admin role required.");
     }
-    const { customerName, customerEmail, amount, description, jobId, packageTier, splitType = "deposit_50", } = request.data;
+    const { customerName, customerEmail, packageKey, amount, description, jobId, packageTier, splitType = "deposit_50", } = request.data;
     if (!customerName || !customerEmail || !amount) {
         throw new https_1.HttpsError("invalid-argument", "customerName, customerEmail, and amount are required.");
     }

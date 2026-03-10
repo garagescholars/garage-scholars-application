@@ -20,7 +20,13 @@ import { useAuth } from "../../../src/hooks/useAuth";
 import { COLLECTIONS } from "../../../src/constants/collections";
 import { colors } from "../../../src/constants/theme";
 import GuidedItemCapture, { PhotoAngle } from "../../../src/components/GuidedItemCapture";
-import type { ConsultationServiceType } from "../../../src/types";
+import type {
+  ConsultationServiceType,
+  GarageSize,
+  CeilingHeight,
+  CurrentState,
+  StylePreference,
+} from "../../../src/types";
 
 const SPACE_ANGLES: PhotoAngle[] = [
   { key: "wide", label: "Full Space", instruction: "Stand at entrance, capture full interior — both walls visible", icon: "resize-outline" },
@@ -29,11 +35,44 @@ const SPACE_ANGLES: PhotoAngle[] = [
   { key: "floor", label: "Floor Detail", instruction: "Camera pointing down at center of floor", icon: "scan-outline" },
 ];
 
+const GARAGE_SIZES: { key: GarageSize; label: string }[] = [
+  { key: "1-car", label: "1-Car" },
+  { key: "2-car", label: "2-Car" },
+  { key: "3-car", label: "3-Car" },
+  { key: "oversized", label: "Oversized" },
+];
+
+const CEILING_HEIGHTS: { key: CeilingHeight; label: string }[] = [
+  { key: "8ft", label: "8 ft" },
+  { key: "9ft", label: "9 ft" },
+  { key: "10ft+", label: "10 ft+" },
+  { key: "open-joists", label: "Open Joists" },
+];
+
+const CURRENT_STATES: { key: CurrentState; label: string }[] = [
+  { key: "empty", label: "Empty" },
+  { key: "cluttered", label: "Cluttered" },
+  { key: "partial-storage", label: "Partial Storage" },
+  { key: "cars-parked", label: "Cars Parked" },
+];
+
+const STYLE_OPTIONS: { key: StylePreference; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+  { key: "clean-modern", label: "Clean & Modern", icon: "sparkles-outline" },
+  { key: "workshop", label: "Workshop", icon: "construct-outline" },
+  { key: "minimalist", label: "Minimalist", icon: "remove-outline" },
+];
+
 type FormData = {
   clientName: string;
   clientPhone: string;
   address: string;
   serviceType: ConsultationServiceType;
+  garageSize: GarageSize | null;
+  ceilingHeight: CeilingHeight | null;
+  currentState: CurrentState[];
+  itemsToPreserve: string;
+  stylePreference: StylePreference | null;
+  dreamDescription: string;
 };
 
 export default function NewConsultation() {
@@ -44,11 +83,26 @@ export default function NewConsultation() {
     clientPhone: "",
     address: "",
     serviceType: "garage_org",
+    garageSize: null,
+    ceilingHeight: null,
+    currentState: [],
+    itemsToPreserve: "",
+    stylePreference: null,
+    dreamDescription: "",
   });
   const [showCapture, setShowCapture] = useState(false);
   const [uploading, setUploading] = useState(false);
 
   const isValid = form.clientName.trim() && form.address.trim();
+
+  const toggleCurrentState = (state: CurrentState) => {
+    setForm((p) => ({
+      ...p,
+      currentState: p.currentState.includes(state)
+        ? p.currentState.filter((s) => s !== state)
+        : [...p.currentState, state],
+    }));
+  };
 
   const handlePhotosComplete = async (photos: Record<string, string>) => {
     if (!photos.wide) {
@@ -60,7 +114,6 @@ export default function NewConsultation() {
     setUploading(true);
 
     try {
-      // Create the consultation doc first
       const docRef = await addDoc(collection(db, COLLECTIONS.CONSULTATIONS), {
         clientName: form.clientName.trim(),
         clientEmail: null,
@@ -70,19 +123,29 @@ export default function NewConsultation() {
         createdAt: serverTimestamp(),
         jobId: null,
         serviceType: form.serviceType,
+        // Space context
+        garageSize: form.garageSize,
+        ceilingHeight: form.ceilingHeight,
+        currentState: form.currentState,
+        itemsToPreserve: form.itemsToPreserve.trim() || null,
+        stylePreference: form.stylePreference,
+        dreamDescription: form.dreamDescription.trim() || null,
         spacePhotoUrls: {},
         garageAddons: {
-          polyasparticFlooring: false,
+          shelving: "none",
+          overheadStorage: "none",
+          cabinets: "none",
+          wallOrg: "none",
+          flooringType: "none",
           flooringColor: null,
-          overheadStorage: false,
-          extraShelving: false,
         },
         gymAddons: {
-          rubberFlooring: false,
+          flooringType: "none",
           flooringColor: null,
-          mirrorWall: false,
-          cableSystem: false,
-          pullUpRig: false,
+          rackSystem: "none",
+          bench: "none",
+          cableMachine: "none",
+          accessories: [],
         },
         mockups: {
           tier1: { status: "idle", imageUrl: null },
@@ -109,7 +172,6 @@ export default function NewConsultation() {
         spacePhotoUrls[angle] = downloadUrl;
       }
 
-      // Update doc with photo URLs and status
       const { doc: firestoreDoc, updateDoc } = await import("firebase/firestore");
       const consultRef = firestoreDoc(db, COLLECTIONS.CONSULTATIONS, docRef.id);
       await updateDoc(consultRef, {
@@ -232,6 +294,99 @@ export default function NewConsultation() {
           onChangeText={(v) => setForm((p) => ({ ...p, address: v }))}
         />
 
+        {/* Space Details */}
+        <Text style={styles.sectionLabel}>SPACE DETAILS</Text>
+
+        <Text style={styles.inputLabel}>Garage Size</Text>
+        <View style={styles.chipRow}>
+          {GARAGE_SIZES.map((opt) => (
+            <TouchableOpacity
+              key={opt.key}
+              style={[styles.chip, form.garageSize === opt.key && styles.chipActive]}
+              onPress={() => setForm((p) => ({ ...p, garageSize: p.garageSize === opt.key ? null : opt.key }))}
+            >
+              <Text style={[styles.chipText, form.garageSize === opt.key && styles.chipTextActive]}>
+                {opt.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        <Text style={styles.inputLabel}>Ceiling Height</Text>
+        <View style={styles.chipRow}>
+          {CEILING_HEIGHTS.map((opt) => (
+            <TouchableOpacity
+              key={opt.key}
+              style={[styles.chip, form.ceilingHeight === opt.key && styles.chipActive]}
+              onPress={() => setForm((p) => ({ ...p, ceilingHeight: p.ceilingHeight === opt.key ? null : opt.key }))}
+            >
+              <Text style={[styles.chipText, form.ceilingHeight === opt.key && styles.chipTextActive]}>
+                {opt.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        <Text style={styles.inputLabel}>Current State</Text>
+        <View style={styles.chipRow}>
+          {CURRENT_STATES.map((opt) => (
+            <TouchableOpacity
+              key={opt.key}
+              style={[styles.chip, form.currentState.includes(opt.key) && styles.chipActive]}
+              onPress={() => toggleCurrentState(opt.key)}
+            >
+              <Text style={[styles.chipText, form.currentState.includes(opt.key) && styles.chipTextActive]}>
+                {opt.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Preferences */}
+        <Text style={styles.sectionLabel}>PREFERENCES</Text>
+
+        <Text style={styles.inputLabel}>Style</Text>
+        <View style={styles.chipRow}>
+          {STYLE_OPTIONS.map((opt) => (
+            <TouchableOpacity
+              key={opt.key}
+              style={[styles.styleCard, form.stylePreference === opt.key && styles.styleCardActive]}
+              onPress={() => setForm((p) => ({ ...p, stylePreference: p.stylePreference === opt.key ? null : opt.key }))}
+            >
+              <Ionicons
+                name={opt.icon}
+                size={20}
+                color={form.stylePreference === opt.key ? colors.brand.teal : colors.text.muted}
+              />
+              <Text style={[styles.chipText, form.stylePreference === opt.key && styles.chipTextActive]}>
+                {opt.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        <Text style={styles.inputLabel}>Items to Preserve</Text>
+        <TextInput
+          style={[styles.input, { minHeight: 60, textAlignVertical: "top" }]}
+          placeholder="e.g., Keep workbench on right wall, keep fridge in corner..."
+          placeholderTextColor={colors.text.muted}
+          value={form.itemsToPreserve}
+          onChangeText={(v) => setForm((p) => ({ ...p, itemsToPreserve: v }))}
+          multiline
+          numberOfLines={2}
+        />
+
+        <Text style={styles.inputLabel}>Dream Garage / Gym Description</Text>
+        <TextInput
+          style={[styles.input, { minHeight: 80, textAlignVertical: "top" }]}
+          placeholder="Describe your dream space — workshop, organized storage, home gym..."
+          placeholderTextColor={colors.text.muted}
+          value={form.dreamDescription}
+          onChangeText={(v) => setForm((p) => ({ ...p, dreamDescription: v }))}
+          multiline
+          numberOfLines={3}
+        />
+
         {/* Capture Photos Button */}
         <TouchableOpacity
           style={[styles.captureBtn, !isValid && styles.captureBtnDisabled]}
@@ -239,11 +394,11 @@ export default function NewConsultation() {
           disabled={!isValid}
         >
           <Ionicons name="camera" size={22} color="#fff" />
-          <Text style={styles.captureBtnText}>Take Space Photos</Text>
+          <Text style={styles.captureBtnText}>Capture Space Photos</Text>
         </TouchableOpacity>
 
         <Text style={styles.hint}>
-          You'll take 4 photos: full space, left wall, right wall, and floor detail.
+          Take or upload 4 photos: full space, left wall, right wall, and floor detail.
         </Text>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -301,6 +456,47 @@ const styles = StyleSheet.create({
     color: colors.text.primary,
     borderWidth: 1,
     borderColor: colors.border.default,
+  },
+  chipRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  chip: {
+    backgroundColor: colors.bg.card,
+    borderRadius: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderWidth: 1.5,
+    borderColor: "transparent",
+  },
+  chipActive: {
+    borderColor: colors.brand.teal,
+    backgroundColor: `${colors.brand.teal}15`,
+  },
+  chipText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.text.secondary,
+  },
+  chipTextActive: {
+    color: colors.brand.teal,
+  },
+  styleCard: {
+    flex: 1,
+    backgroundColor: colors.bg.card,
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 10,
+    alignItems: "center",
+    gap: 6,
+    borderWidth: 1.5,
+    borderColor: "transparent",
+    minWidth: 90,
+  },
+  styleCardActive: {
+    borderColor: colors.brand.teal,
+    backgroundColor: `${colors.brand.teal}15`,
   },
   captureBtn: {
     flexDirection: "row",

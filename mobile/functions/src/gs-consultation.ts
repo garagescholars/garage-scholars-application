@@ -22,7 +22,7 @@ const GS_PACKAGES = {
   garage_org: {
     tier1: { name: "The Undergraduate", price: 1197 },
     tier2: { name: "The Graduate", price: 2197 },
-    tier3: { name: "The Doctorate", price: 3697 },
+    tier3: { name: "The Doctorate", price: 3797 },
   },
   gym_install: {
     tier1: { name: "Warm Up", price: 997 },
@@ -31,54 +31,236 @@ const GS_PACKAGES = {
   },
 } as const;
 
+// ── Backward compatibility helpers ──
+
+function normalizeGarageAddons(raw: any) {
+  if (!raw) return { shelving: "none", overheadStorage: "none", cabinets: "none", wallOrg: "none", flooringType: "none", flooringColor: null };
+  // Old boolean shape
+  if (typeof raw.overheadStorage === "boolean" || typeof raw.polyasparticFlooring === "boolean") {
+    return {
+      shelving: raw.extraShelving ? "1-unit" : "none",
+      overheadStorage: raw.overheadStorage ? "2-racks" : "none",
+      cabinets: "none",
+      wallOrg: "none",
+      flooringType: raw.polyasparticFlooring ? "polyaspartic" : "none",
+      flooringColor: raw.flooringColor && typeof raw.flooringColor === "string"
+        ? { code: "", name: raw.flooringColor }
+        : raw.flooringColor || null,
+    };
+  }
+  // Handle transitional shape with boolean `flooring` field
+  if (typeof raw.flooring === "boolean") {
+    return { ...raw, flooringType: raw.flooring ? "polyaspartic" : "none" };
+  }
+  return raw;
+}
+
+function normalizeGymAddons(raw: any) {
+  if (!raw) return { flooringType: "none", flooringColor: null, rackSystem: "none", bench: "none", cableMachine: "none", accessories: [] };
+  // Old boolean shape
+  if (typeof raw.rubberFlooring === "boolean" || typeof raw.cableSystem === "boolean") {
+    const accessories: string[] = [];
+    if (raw.mirrorWall) accessories.push("mirrors");
+    if (raw.pullUpRig) accessories.push("pull-up-rig");
+    return {
+      flooringType: raw.rubberFlooring ? "rubber-tiles" : "none",
+      flooringColor: raw.flooringColor && typeof raw.flooringColor === "string"
+        ? { code: "", name: raw.flooringColor }
+        : raw.flooringColor || null,
+      rackSystem: "none",
+      bench: "none",
+      cableMachine: raw.cableSystem ? "single-stack" : "none",
+      accessories,
+    };
+  }
+  // Handle transitional shape with boolean `flooring` field
+  if (typeof raw.flooring === "boolean") {
+    return { ...raw, flooringType: raw.flooring ? "rubber-tiles" : "none" };
+  }
+  return raw;
+}
+
 // ── Prompt builders ──
 
-function buildGarageOrgPrompt(
-  tier: Tier,
-  addons: { polyasparticFlooring: boolean; flooringColor: string | null; overheadStorage: boolean; extraShelving: boolean }
-): string {
-  switch (tier) {
-    case "tier1":
-      return "Add two white overhead metal ceiling storage racks mounted near the ceiling joists. Keep all existing walls, floor surface, garage door, and structure completely unchanged. Photorealistic, match original lighting and shadows.";
-    case "tier2":
-      return "Add labeled plastic storage bins organized on black wire shelving units along the walls, plus two overhead ceiling storage racks. Keep existing floor and all structure unchanged. Photorealistic, match original lighting.";
-    case "tier3": {
-      const floorInstruction = addons.polyasparticFlooring && addons.flooringColor
-        ? `Replace floor with ${addons.flooringColor} polyaspartic flake floor coating.`
-        : "Keep existing floor.";
-      return `Add NewAge Bold Series black steel cabinets lining the walls, overhead ceiling storage racks, and a pegboard tool wall. ${floorInstruction} Bright, professionally organized, magazine-quality home garage. Photorealistic.`;
-    }
+function buildSpaceContext(doc: any): string {
+  const parts: string[] = [];
+
+  const size = doc.garageSize || "2-car";
+  const ceiling = doc.ceilingHeight;
+  let sizeStr = `This is a ${size} garage`;
+  if (ceiling === "open-joists") sizeStr += " with open joist ceilings";
+  else if (ceiling === "10ft+") sizeStr += " with tall 10-foot ceilings";
+  else if (ceiling) sizeStr += ` with ${ceiling} ceilings`;
+  parts.push(sizeStr + ".");
+
+  const states: string[] = doc.currentState || [];
+  if (states.includes("cluttered")) parts.push("The space is currently cluttered with items.");
+  if (states.includes("cars-parked")) parts.push("Cars may be parked in the space.");
+
+  if (doc.itemsToPreserve) {
+    parts.push(`Keep the following items unchanged: ${doc.itemsToPreserve}.`);
+  }
+
+  return parts.join(" ");
+}
+
+function getStyleText(style: string | undefined): string {
+  switch (style) {
+    case "workshop": return "Functional workshop-style";
+    case "minimalist": return "Clean, minimalist";
+    default: return "Sleek, modern, magazine-quality";
   }
 }
 
-function buildGymInstallPrompt(
-  tier: Tier,
-  addons: { rubberFlooring: boolean; flooringColor: string | null; mirrorWall: boolean; cableSystem: boolean; pullUpRig: boolean }
-): string {
+function buildFloorInstruction(addons: any, serviceType: "garage" | "gym"): string {
+  const flooringType = addons.flooringType || "none";
+  if (flooringType === "none") return "Keep existing floor surface.";
+
+  const color = addons.flooringColor;
+  const colorStr = color?.name && color?.code
+    ? `Benjamin Moore ${color.name} (${color.code}) `
+    : color?.name
+    ? `${color.name} `
+    : "";
+
+  const flooringMap: Record<string, string> = {
+    "polyaspartic": `${colorStr}polyaspartic flake floor coating`,
+    "click-in-plate": `${colorStr}click-in diamond plate garage flooring tiles`,
+    "stall-mats": `${colorStr}rubber stall mat flooring (3/4" thick)`,
+    "rubber-tiles": `${colorStr}interlocking rubber floor tiles`,
+  };
+
+  const flooringDesc = flooringMap[flooringType] || `${colorStr}flooring`;
+  return `Replace the floor with ${flooringDesc}.`;
+}
+
+function buildGarageOrgPrompt(tier: Tier, doc: any): string {
+  const addons = normalizeGarageAddons(doc.garageAddons);
+  const context = buildSpaceContext(doc);
+  const style = getStyleText(doc.stylePreference);
+  const floor = buildFloorInstruction(addons, "garage");
+  const dream = doc.dreamDescription ? ` Client vision: ${doc.dreamDescription}.` : "";
+
+  // Build item list based on tier + addon selections
+  const items: string[] = [];
+
   switch (tier) {
-    case "tier1":
-      return "Add interlocking black rubber floor tiles covering the garage floor, a wall-mounted dumbbell rack with adjustable dumbbells (5-50 lbs), and a fold-flat wall-mounted pull-up bar. Keep all walls and ceiling unchanged. Photorealistic, bright clean lighting.";
+    case "tier1": {
+      // Entry: overhead + optional shelving
+      const overhead = addons.overheadStorage !== "none"
+        ? `${addons.overheadStorage === "4-racks" ? "four" : "two"} white overhead metal ceiling storage racks mounted near the ceiling joists`
+        : "two white overhead metal ceiling storage racks mounted near the ceiling joists";
+      items.push(overhead);
+      if (addons.shelving !== "none") {
+        const count = addons.shelving === "3-units" ? "three" : addons.shelving === "2-units" ? "two" : "one";
+        items.push(`${count} black wire shelving unit${count !== "one" ? "s" : ""} along the walls`);
+      }
+      break;
+    }
     case "tier2": {
-      const floorText = addons.rubberFlooring ? "black rubber flooring tiles" : "existing floor";
-      return `Add ${floorText} covering the floor, a full power cage/squat rack with barbell and plates, adjustable FID bench, cable machine in corner, wall-mounted dumbbell rack. Professional home gym look. Photorealistic.`;
+      // Mid: overhead + shelving with bins + wall org
+      const overhead = addons.overheadStorage !== "none"
+        ? `${addons.overheadStorage === "4-racks" ? "four" : "two"} overhead ceiling storage racks`
+        : "two overhead ceiling storage racks";
+      items.push(overhead);
+      const shelvingCount = addons.shelving === "3-units" ? "three" : addons.shelving === "2-units" ? "two" : addons.shelving === "1-unit" ? "one" : "two";
+      items.push(`${shelvingCount} black wire shelving unit${shelvingCount !== "one" ? "s" : ""} with labeled clear plastic bins along the walls`);
+      if (addons.wallOrg === "pegboard") items.push("a pegboard tool wall");
+      else if (addons.wallOrg === "slatwall") items.push("a slatwall organization panel");
+      break;
     }
     case "tier3": {
-      const floorText = addons.rubberFlooring ? "rubber flooring" : "existing floor";
-      const extras: string[] = [];
-      if (addons.pullUpRig) extras.push("freestanding pull-up/muscle-up rig");
-      if (addons.mirrorWall) extras.push("full-length mirrors on back wall");
-      if (addons.cableSystem) extras.push("functional trainer / cable crossover");
-      const extrasText = extras.length > 0 ? `, ${extras.join(", ")}` : "";
-      return `Add ${floorText}, full squat rack system, cable crossover machine, commercial dumbbell rack (5-100 lbs)${extrasText}. Elite home gym, bright clean lighting, magazine-quality. Photorealistic.`;
+      // Premium: cabinets + overhead + wall org + everything
+      if (addons.cabinets === "premium-newage") items.push("NewAge Bold Series black steel cabinets lining the walls");
+      else if (addons.cabinets === "basic-wire") items.push("wall-mounted wire storage cabinets");
+      else items.push("NewAge Bold Series black steel cabinets lining the walls");
+      const overhead = addons.overheadStorage !== "none"
+        ? `${addons.overheadStorage === "4-racks" ? "four" : "two"} overhead ceiling storage racks`
+        : "four overhead ceiling storage racks";
+      items.push(overhead);
+      if (addons.wallOrg === "slatwall") items.push("a slatwall organization system");
+      else items.push("a pegboard tool wall");
+      if (addons.shelving !== "none") {
+        const count = addons.shelving === "3-units" ? "three" : addons.shelving === "2-units" ? "two" : "one";
+        items.push(`${count} additional shelving unit${count !== "one" ? "s" : ""}`);
+      }
+      break;
     }
   }
+
+  const itemsStr = items.join(", ");
+  return `${context} Add ${itemsStr}. ${floor} ${style} home garage. Photorealistic, match original lighting and shadows.${dream}`;
+}
+
+function buildGymInstallPrompt(tier: Tier, doc: any): string {
+  const addons = normalizeGymAddons(doc.gymAddons);
+  const context = buildSpaceContext(doc);
+  const style = getStyleText(doc.stylePreference);
+  const floor = buildFloorInstruction(addons, "gym");
+  const dream = doc.dreamDescription ? ` Client vision: ${doc.dreamDescription}.` : "";
+
+  const items: string[] = [];
+
+  // Rack
+  const rackMap: Record<string, string> = {
+    "wall-mount": "a wall-mounted pull-up bar and dumbbell rack",
+    "half-rack": "a half squat rack with barbell and plates",
+    "full-power-cage": "a full power cage/squat rack with barbell, plates, and safety bars",
+  };
+
+  // Bench
+  const benchMap: Record<string, string> = {
+    "flat": "a flat weight bench",
+    "adjustable-fid": "an adjustable FID weight bench",
+  };
+
+  // Cable
+  const cableMap: Record<string, string> = {
+    "single-stack": "a single-stack cable machine",
+    "functional-trainer": "a functional trainer with dual adjustable pulleys",
+    "crossover": "a cable crossover machine",
+  };
+
+  switch (tier) {
+    case "tier1": {
+      if (addons.flooringType && addons.flooringType !== "none") {
+        items.push(addons.flooringType === "stall-mats" ? "rubber stall mat flooring covering the garage floor" : "interlocking rubber floor tiles covering the garage floor");
+      }
+      items.push(rackMap[addons.rackSystem] || "a wall-mounted dumbbell rack with adjustable dumbbells (5-50 lbs) and a fold-flat wall-mounted pull-up bar");
+      break;
+    }
+    case "tier2": {
+      items.push(rackMap[addons.rackSystem] || "a full power cage/squat rack with barbell and plates");
+      if (addons.bench !== "none") items.push(benchMap[addons.bench] || "an adjustable FID bench");
+      else items.push("an adjustable FID bench");
+      if (addons.cableMachine !== "none") items.push(cableMap[addons.cableMachine] || "a cable machine in the corner");
+      else items.push("a cable machine in the corner");
+      items.push("a wall-mounted dumbbell rack");
+      break;
+    }
+    case "tier3": {
+      items.push(rackMap[addons.rackSystem] || "a full squat rack system with barbell and competition plates");
+      items.push(cableMap[addons.cableMachine] || "a cable crossover machine");
+      items.push("a commercial dumbbell rack (5-100 lbs)");
+      if (addons.bench !== "none") items.push(benchMap[addons.bench] || "an adjustable FID bench");
+      // Accessories
+      const acc: string[] = addons.accessories || [];
+      if (acc.includes("pull-up-rig")) items.push("a freestanding pull-up/muscle-up rig");
+      if (acc.includes("mirrors")) items.push("full-length mirrors on the back wall");
+      if (acc.includes("kettlebells")) items.push("a kettlebell set on a storage rack");
+      break;
+    }
+  }
+
+  const itemsStr = items.join(", ");
+  return `${context} Add ${itemsStr}. ${floor} ${style} home gym, bright clean lighting. Photorealistic, match original lighting and shadows.${dream}`;
 }
 
 function buildPrompt(serviceType: ServiceType, tier: Tier, doc: any): string {
   if (serviceType === "garage_org") {
-    return buildGarageOrgPrompt(tier, doc.garageAddons || {});
+    return buildGarageOrgPrompt(tier, doc);
   }
-  return buildGymInstallPrompt(tier, doc.gymAddons || {});
+  return buildGymInstallPrompt(tier, doc);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -88,7 +270,7 @@ function buildPrompt(serviceType: ServiceType, tier: Tier, doc: any): string {
 export const gsGenerateConsultMockup = onCall(
   {
     cors: true,
-    timeoutSeconds: 120,
+    timeoutSeconds: 300,
     memory: "512MiB",
     secrets: ["FAL_API_KEY"],
   },
@@ -142,6 +324,8 @@ export const gsGenerateConsultMockup = onCall(
       } else {
         prompt = buildPrompt(serviceType, tier, doc);
       }
+
+      console.log(`[Mockup ${consultationId}/${tier}] Prompt: ${prompt}`);
 
       // Call fal.ai FLUX.1 [pro] Fill
       const falResponse = await fetch("https://fal.run/fal-ai/flux-pro/v1/fill", {
