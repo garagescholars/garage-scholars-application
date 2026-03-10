@@ -322,7 +322,7 @@ export type GsScholarAnalytics = {
 
 export type PayoutSplitType = "checkin_50" | "completion_50" | "resale" | "full";
 export type PayoutStatus = "pending" | "processing" | "paid" | "failed" | "held";
-export type PayoutMethod = "stripe_ach" | "manual_zelle" | "manual_venmo" | "manual_cash" | "manual_check";
+export type PayoutMethod = "stripe_ach" | "manual_ach" | "manual_cash" | "manual_check";
 
 export type GsPayout = {
   id: string;
