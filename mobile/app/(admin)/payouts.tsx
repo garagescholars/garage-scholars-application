@@ -608,15 +608,13 @@ export default function PayoutsScreen() {
     <AdminPageWrapper scrollable={false}>
       {/* Header */}
       <View style={[styles.header, isMobile && styles.headerMobile]}>
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.headerTitle, isMobile && { fontSize: 18 }]}>Payouts</Text>
-          {!isMobile && (
-            <Text style={styles.headerSubtitle}>
-              Track and manage scholar payments
-            </Text>
-          )}
-        </View>
-        <View style={[styles.headerActions, isMobile && styles.headerActionsMobile]}>
+        <Text style={[styles.headerTitle, isMobile && { fontSize: 18 }]}>Payouts</Text>
+        {!isMobile && (
+          <Text style={styles.headerSubtitle}>
+            Track and manage scholar payments
+          </Text>
+        )}
+        <View style={styles.headerActions}>
           <TouchableOpacity
             style={[styles.bankLinkBtn, isMobile && styles.actionBtnMobile]}
             onPress={() => setBankLinkModal(true)}
@@ -1033,13 +1031,14 @@ const styles = StyleSheet.create({
   // Header
   header: {
     flexDirection: "row",
+    flexWrap: "wrap",
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 16,
-    gap: 12,
+    gap: 8,
   },
   headerMobile: {
-    marginBottom: 12,
+    marginBottom: 10,
   },
   headerTitle: {
     fontSize: 22,
@@ -1050,13 +1049,11 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#8b9bb5",
     marginTop: 2,
+    width: "100%",
   },
   headerActions: {
     flexDirection: "row",
     gap: 8,
-  },
-  headerActionsMobile: {
-    gap: 6,
   },
   actionBtnMobile: {
     paddingHorizontal: 10,
