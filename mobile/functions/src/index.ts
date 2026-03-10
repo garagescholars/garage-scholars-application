@@ -22,6 +22,7 @@ export {
   gsComputeAnalytics,
   gsSubmitComplaint,
   gsSendPush,
+  gsScoreJob,
 } from "./gs-functions";
 
 // ── Garage Scholars Notification functions ──
@@ -45,6 +46,14 @@ export {
   gsCreateInvoice,
   gsCreateBalanceInvoice,
   gsCheckMissedBalanceInvoices,
+  gsSendResalePaymentLink,
+  gsSaveResalePaymentInfo,
+  gsSaveScholarBankInfo,
+  gsSaveResaleBankInfo,
+  gsAdminComplaint,
+  gsWeeklyReplenishmentReport,
+  gsFundMercuryFromChase,
+  gsCpaReconciliationReport,
 } from "./gs-payments";
 
 // ── Garage Scholars Social Media functions ──

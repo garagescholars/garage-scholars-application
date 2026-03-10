@@ -64,10 +64,37 @@ async function notifyAdmins(subject: string, body: string) {
   });
 }
 
-// ── Helper: get admin push tokens (reuse from gs-functions pattern) ──
-async function getAdminTokens(): Promise<string[]> {
+// ── Helper: get admin push tokens, optionally filtered by notification preference ──
+type NotifCategory = "jobReviews" | "payoutAlerts" | "complaints" | "weeklyReport" | "mercuryAlerts" | "scholarCheckins";
+async function getAdminTokens(category?: NotifCategory): Promise<string[]> {
   const snap = await db.collection(GS_COLLECTIONS.PROFILES).where("role", "==", "admin").get();
-  return snap.docs.map((d) => d.data().pushToken as string).filter(Boolean);
+  return snap.docs
+    .filter((d) => {
+      const token = d.data().pushToken;
+      if (!token) return false;
+      if (category) {
+        const prefs = d.data().notificationPrefs;
+        if (prefs && prefs[category] === false) return false;
+      }
+      return true;
+    })
+    .map((d) => d.data().pushToken as string);
+}
+
+// ── Helper: get admin emails, optionally filtered by notification preference ──
+async function getAdminEmails(category?: NotifCategory): Promise<string[]> {
+  const snap = await db.collection(GS_COLLECTIONS.PROFILES).where("role", "==", "admin").get();
+  return snap.docs
+    .filter((d) => {
+      const email = d.data().email;
+      if (!email) return false;
+      if (category) {
+        const prefs = d.data().notificationPrefs;
+        if (prefs && prefs[category] === false) return false;
+      }
+      return true;
+    })
+    .map((d) => d.data().email as string);
 }
 
 async function sendExpoPush(pushTokens: string[], title: string, body: string, data?: Record<string, string>) {
@@ -113,8 +140,8 @@ export async function createCheckinPayout(jobId: string, jobData: FirebaseFirest
   const totalPayout = (jobData.payout || 0) + (jobData.rushBonus || 0);
   const firstHalf = Math.round((totalPayout * CHECKIN_SPLIT_PERCENT) / 100 * 100) / 100;
 
-  // Check if scholar has Stripe Connect set up
-  const stripeAccSnap = await db
+  // Check if scholar has bank info on file for Mercury ACH
+  const bankAccSnap = await db
     .collection(GS_COLLECTIONS.STRIPE_ACCOUNTS)
     .where("userId", "==", scholarId)
     .where("accountType", "==", "scholar")
@@ -122,8 +149,12 @@ export async function createCheckinPayout(jobId: string, jobData: FirebaseFirest
     .limit(1)
     .get();
 
-  const hasStripe = !stripeAccSnap.empty;
-  const stripeAccountId = hasStripe ? stripeAccSnap.docs[0].data().stripeAccountId : null;
+  const hasBankInfo = !bankAccSnap.empty && !!bankAccSnap.docs[0].data().bankRouting;
+  const bankData = hasBankInfo ? bankAccSnap.docs[0].data() : null;
+
+  // Check for Zelle/Venmo fallback
+  const hasFallback = !hasBankInfo && bankAccSnap.docs?.[0]?.data()?.fallbackMethod;
+  const fallbackData = hasFallback ? bankAccSnap.docs[0].data() : null;
 
   // Create payout doc
   const payoutRef = db.collection(GS_COLLECTIONS.PAYOUTS).doc();
@@ -133,33 +164,48 @@ export async function createCheckinPayout(jobId: string, jobData: FirebaseFirest
     recipientName: jobData.claimedByName || "Scholar",
     amount: firstHalf,
     splitType: "checkin_50",
-    status: hasStripe ? "processing" : "pending",
-    paymentMethod: hasStripe ? "stripe_ach" : "manual_zelle",
+    status: "pending",
+    paymentMethod: "none",
     complaintWindowPassed: false,
     taxYear: new Date().getFullYear(),
     createdAt: FieldValue.serverTimestamp(),
   };
 
-  // If Stripe is set up, initiate transfer
-  if (hasStripe && stripeAccountId) {
-    try {
-      const stripe = getStripe();
-      const transfer = await stripe.transfers.create({
-        amount: Math.round(firstHalf * 100), // Stripe uses cents
-        currency: "usd",
-        destination: stripeAccountId,
-        description: `Check-in payout: ${jobData.title || jobId}`,
-        metadata: { jobId, scholarId, splitType: "checkin_50" },
-      });
-      payoutData.stripeTransferId = transfer.id;
-      payoutData.status = "processing";
-      console.log(`Stripe transfer created: ${transfer.id} for $${firstHalf}`);
-    } catch (err) {
-      console.error(`Stripe transfer failed for job ${jobId}:`, err);
-      payoutData.status = "pending";
-      payoutData.paymentMethod = "manual_zelle";
-      payoutData.notes = `Stripe transfer failed: ${(err as Error).message}`;
+  // Priority 1: Mercury ACH direct deposit
+  if (hasBankInfo && bankData) {
+    const mercury = await getMercuryConfig();
+    if (mercury) {
+      const result = await sendMercuryPayout(
+        mercury.apiKey,
+        mercury.accountId,
+        {
+          name: bankData.accountHolderName || jobData.claimedByName || "Scholar",
+          routingNumber: bankData.bankRouting,
+          accountNumber: bankData.bankAccount,
+          accountType: bankData.bankAccountType || "checking",
+        },
+        firstHalf,
+        `Check-in payout: ${jobData.title || jobId}`
+      );
+      payoutData.status = result.status;
+      payoutData.paymentMethod = result.method;
+      if (result.transferId) payoutData.mercuryTransferId = result.transferId;
+      if (result.error) payoutData.notes = `Mercury: ${result.error}`;
     }
+  }
+
+  // Priority 2: Zelle/Venmo on file
+  if (payoutData.paymentMethod === "none" && fallbackData) {
+    payoutData.paymentMethod = fallbackData.fallbackMethod;
+    payoutData.fallbackHandle = fallbackData.fallbackHandle;
+    payoutData.status = "awaiting_send";
+    payoutData.notes = `Send via ${fallbackData.fallbackMethod}: ${fallbackData.fallbackHandle}`;
+  }
+
+  // Priority 3: No payment info — manual
+  if (payoutData.paymentMethod === "none") {
+    payoutData.paymentMethod = "manual";
+    payoutData.status = "pending";
   }
 
   await payoutRef.set(payoutData);
@@ -170,23 +216,26 @@ export async function createCheckinPayout(jobId: string, jobData: FirebaseFirest
     paymentStatus: "first_paid",
   });
 
-  // Notify admins if manual payment needed
-  if (!hasStripe) {
+  // Notify admins if not fully automated
+  if (payoutData.status !== "processing") {
     const scholarName = jobData.claimedByName || "Unknown Scholar";
+    const actionMsg = payoutData.paymentMethod === "manual"
+      ? "No bank info on file — send them a bank link or pay via Zelle/Venmo."
+      : `Send via ${payoutData.paymentMethod}: ${payoutData.fallbackHandle || ""}. Then mark as paid.`;
+
     await notifyAdmins(
-      `💰 Manual Payment Required: $${firstHalf}`,
+      `Payout Action: $${firstHalf} to ${scholarName}`,
       `<p><strong>${scholarName}</strong> checked in for "<strong>${jobData.title || jobId}</strong>".</p>
        <p>First 50% payout: <strong>$${firstHalf}</strong></p>
-       <p>Scholar does not have Stripe set up — please pay manually via Zelle/Venmo.</p>
-       <p>Job ID: ${jobId}</p>`
+       <p><strong>Action:</strong> ${actionMsg}</p>`
     );
 
     const adminTokens = await getAdminTokens();
     if (adminTokens.length > 0) {
       await sendExpoPush(
         adminTokens,
-        "Manual Payment Needed",
-        `Pay ${scholarName} $${firstHalf} for check-in (${jobData.title})`,
+        "Payout Action Needed",
+        `$${firstHalf} to ${scholarName} for check-in (${jobData.title})`,
         { screen: "admin-payments", jobId }
       );
     }
@@ -302,8 +351,8 @@ export const gsReleaseCompletionPayouts = onSchedule(
         const totalPayout = (jobData.payout || 0) + (jobData.rushBonus || 0);
         const secondHalf = Math.round((totalPayout * COMPLETION_SPLIT_PERCENT) / 100 * 100) / 100;
 
-        // Check for Stripe
-        const stripeAccSnap = await db
+        // Check for bank info (Mercury ACH)
+        const bankAccSnap = await db
           .collection(GS_COLLECTIONS.STRIPE_ACCOUNTS)
           .where("userId", "==", scholarId)
           .where("accountType", "==", "scholar")
@@ -311,8 +360,10 @@ export const gsReleaseCompletionPayouts = onSchedule(
           .limit(1)
           .get();
 
-        const hasStripe = !stripeAccSnap.empty;
-        const stripeAccountId = hasStripe ? stripeAccSnap.docs[0].data().stripeAccountId : null;
+        const hasBankInfo = !bankAccSnap.empty && !!bankAccSnap.docs[0].data().bankRouting;
+        const bankInfo = hasBankInfo ? bankAccSnap.docs[0].data() : null;
+        const hasFallback = !hasBankInfo && bankAccSnap.docs?.[0]?.data()?.fallbackMethod;
+        const fallbackInfo = hasFallback ? bankAccSnap.docs[0].data() : null;
 
         // Create completion payout
         const payoutRef = db.collection(GS_COLLECTIONS.PAYOUTS).doc();
@@ -322,8 +373,8 @@ export const gsReleaseCompletionPayouts = onSchedule(
           recipientName: jobData.claimedByName || "Scholar",
           amount: secondHalf,
           splitType: "completion_50",
-          status: hasStripe ? "processing" : "pending",
-          paymentMethod: hasStripe ? "stripe_ach" : "manual_zelle",
+          status: "pending",
+          paymentMethod: "none",
           releaseEligibleAt: Timestamp.fromDate(releaseTime),
           qualityScoreAtRelease: finalScore,
           complaintWindowPassed: true,
@@ -331,25 +382,41 @@ export const gsReleaseCompletionPayouts = onSchedule(
           createdAt: FieldValue.serverTimestamp(),
         };
 
-        // Initiate Stripe transfer if available
-        if (hasStripe && stripeAccountId) {
-          try {
-            const stripe = getStripe();
-            const transfer = await stripe.transfers.create({
-              amount: Math.round(secondHalf * 100),
-              currency: "usd",
-              destination: stripeAccountId,
-              description: `Completion payout: ${jobData.title || jobId}`,
-              metadata: { jobId, scholarId, splitType: "completion_50" },
-            });
-            payoutData.stripeTransferId = transfer.id;
-            console.log(`Stripe completion transfer: ${transfer.id} for $${secondHalf}`);
-          } catch (err) {
-            console.error(`Stripe transfer failed for completion ${jobId}:`, err);
-            payoutData.status = "pending";
-            payoutData.paymentMethod = "manual_zelle";
-            payoutData.notes = `Stripe transfer failed: ${(err as Error).message}`;
+        // Priority 1: Mercury ACH direct deposit
+        if (hasBankInfo && bankInfo) {
+          const mercury = await getMercuryConfig();
+          if (mercury) {
+            const result = await sendMercuryPayout(
+              mercury.apiKey,
+              mercury.accountId,
+              {
+                name: bankInfo.accountHolderName || jobData.claimedByName || "Scholar",
+                routingNumber: bankInfo.bankRouting,
+                accountNumber: bankInfo.bankAccount,
+                accountType: bankInfo.bankAccountType || "checking",
+              },
+              secondHalf,
+              `Completion payout: ${jobData.title || jobId}`
+            );
+            payoutData.status = result.status;
+            payoutData.paymentMethod = result.method;
+            if (result.transferId) payoutData.mercuryTransferId = result.transferId;
+            if (result.error) payoutData.notes = `Mercury: ${result.error}`;
           }
+        }
+
+        // Priority 2: Zelle/Venmo fallback
+        if (payoutData.paymentMethod === "none" && fallbackInfo) {
+          payoutData.paymentMethod = fallbackInfo.fallbackMethod;
+          payoutData.fallbackHandle = fallbackInfo.fallbackHandle;
+          payoutData.status = "awaiting_send";
+          payoutData.notes = `Send via ${fallbackInfo.fallbackMethod}: ${fallbackInfo.fallbackHandle}`;
+        }
+
+        // Priority 3: No payment info
+        if (payoutData.paymentMethod === "none") {
+          payoutData.paymentMethod = "manual";
+          payoutData.status = "pending";
         }
 
         await payoutRef.set(payoutData);
@@ -364,23 +431,29 @@ export const gsReleaseCompletionPayouts = onSchedule(
         const scholarProfile = await db.collection(GS_COLLECTIONS.PROFILES).doc(scholarId).get();
         const pushToken = scholarProfile.data()?.pushToken;
         if (pushToken) {
+          const depositMsg = payoutData.paymentMethod === "mercury_ach"
+            ? "sent via direct deposit — arrives in 1-2 business days"
+            : "approved — you'll receive payment shortly";
           await sendExpoPush(
             [pushToken],
             "Payment Released!",
-            `Your completion payout of $${secondHalf} for "${jobData.title}" has been ${hasStripe ? "sent to your bank" : "approved — contact admin for payment"}.`,
+            `Your completion payout of $${secondHalf} for "${jobData.title}" has been ${depositMsg}.`,
             { screen: "payments" }
           );
         }
 
-        // Notify admins if manual
-        if (!hasStripe) {
+        // Notify admins if not fully automated
+        if (payoutData.status !== "processing") {
+          const actionMsg = payoutData.paymentMethod === "manual"
+            ? "No bank info on file — send them a bank link or pay via Zelle/Venmo."
+            : `Send via ${payoutData.paymentMethod}: ${payoutData.fallbackHandle || ""}. Then mark as paid.`;
           await notifyAdmins(
-            `💰 Manual Payment Required: $${secondHalf} (Completion)`,
+            `Payout Action: $${secondHalf} to ${jobData.claimedByName || scholarId} (Completion)`,
             `<p>Completion payout released for "<strong>${jobData.title || jobId}</strong>".</p>
              <p>Scholar: <strong>${jobData.claimedByName || scholarId}</strong></p>
              <p>Amount: <strong>$${secondHalf}</strong></p>
              <p>Quality Score: ${finalScore.toFixed(2)}</p>
-             <p>Please pay manually via Zelle/Venmo.</p>`
+             <p><strong>Action:</strong> ${actionMsg}</p>`
           );
         }
 
@@ -1038,16 +1111,13 @@ export const gsResalePayout = onCall(
       throw new HttpsError("permission-denied", "Admin role required.");
     }
 
-    const { customerId, customerName, customerEmail, amount, description, jobId, bankRouting, bankAccount, bankAccountType } = request.data as {
+    const { customerId, customerName, customerEmail, amount, description, jobId } = request.data as {
       customerId: string;
       customerName: string;
       customerEmail?: string;
       amount: number;
       description?: string;
       jobId?: string;
-      bankRouting?: string;
-      bankAccount?: string;
-      bankAccountType?: "checking" | "savings";
     };
 
     if (!customerId || !amount) {
@@ -1063,36 +1133,112 @@ export const gsResalePayout = onCall(
       amount,
       splitType: "resale",
       status: "pending",
-      paymentMethod: "manual_zelle",
+      paymentMethod: "none",
       complaintWindowPassed: true,
       taxYear: new Date().getFullYear(),
       notes: description || "Resale payout",
       createdAt: FieldValue.serverTimestamp(),
     };
 
-    // Try Mercury ACH if bank details provided
-    const mercury = await getMercuryConfig();
-    if (mercury && bankRouting && bankAccount) {
-      const result = await sendMercuryPayout(
-        mercury.apiKey,
-        mercury.accountId,
-        { name: customerName, routingNumber: bankRouting, accountNumber: bankAccount, accountType: bankAccountType || "checking" },
-        amount,
-        description || `Resale payout to ${customerName}`
-      );
-      payoutData.status = result.status;
-      payoutData.paymentMethod = result.method;
-      if (result.transferId) payoutData.mercuryTransferId = result.transferId;
-      if (result.error) payoutData.notes += ` | ${result.error}`;
+    // ── Auto-resolve payment method from stored customer info ──
+
+    // 1) Try Stripe transfer — check if customer has a linked Stripe account
+    let stripeAccount: FirebaseFirestore.DocumentData | null = null;
+    if (customerEmail) {
+      const stripeSnap = await db
+        .collection(GS_COLLECTIONS.STRIPE_ACCOUNTS)
+        .where("email", "==", customerEmail)
+        .where("accountType", "==", "resale_customer")
+        .limit(1)
+        .get();
+      if (!stripeSnap.empty) {
+        stripeAccount = stripeSnap.docs[0].data();
+      }
+    }
+
+    if (stripeAccount?.onboardingComplete && stripeAccount?.payoutsEnabled && stripeAccount?.stripeAccountId) {
+      // Stripe Connect transfer — fully automated
+      try {
+        const stripe = getStripe();
+        const transfer = await stripe.transfers.create({
+          amount: Math.round(amount * 100),
+          currency: "usd",
+          destination: stripeAccount.stripeAccountId,
+          description: description || `Resale payout to ${customerName}`,
+          metadata: {
+            payoutId: payoutRef.id,
+            customerId,
+            platform: "garage_scholars",
+          },
+        });
+        payoutData.status = "processing";
+        payoutData.paymentMethod = "stripe_transfer";
+        payoutData.stripeTransferId = transfer.id;
+      } catch (err) {
+        console.error("Stripe transfer failed for resale payout, falling back:", err);
+        // Fall through to next method
+      }
+    }
+
+    // 2) Try Zelle/Venmo — check stored fallback handle
+    if (payoutData.paymentMethod === "none" && stripeAccount?.fallbackMethod && stripeAccount?.fallbackHandle) {
+      const method = stripeAccount.fallbackMethod as "zelle" | "venmo";
+      payoutData.paymentMethod = method;
+      payoutData.fallbackHandle = stripeAccount.fallbackHandle;
+      payoutData.status = "awaiting_send";
+      payoutData.notes += ` | Send via ${method}: ${stripeAccount.fallbackHandle}`;
+    }
+
+    // 3) Try Mercury ACH as last automated option
+    if (payoutData.paymentMethod === "none") {
+      const mercury = await getMercuryConfig();
+      if (mercury) {
+        // Check if we have bank details stored on the stripe account doc
+        const bankRouting = stripeAccount?.bankRouting;
+        const bankAccount = stripeAccount?.bankAccount;
+        if (bankRouting && bankAccount) {
+          const result = await sendMercuryPayout(
+            mercury.apiKey,
+            mercury.accountId,
+            { name: customerName, routingNumber: bankRouting, accountNumber: bankAccount, accountType: stripeAccount?.bankAccountType || "checking" },
+            amount,
+            description || `Resale payout to ${customerName}`
+          );
+          payoutData.status = result.status;
+          payoutData.paymentMethod = result.method;
+          if (result.transferId) payoutData.mercuryTransferId = result.transferId;
+          if (result.error) payoutData.notes += ` | ${result.error}`;
+        }
+      }
+    }
+
+    // 4) No payment method found — manual intervention needed
+    if (payoutData.paymentMethod === "none") {
+      payoutData.paymentMethod = "manual";
+      payoutData.status = "pending";
     }
 
     await payoutRef.set(payoutData);
 
     // Email the resale customer
     if (customerEmail) {
-      const paymentMethodLabel = payoutData.paymentMethod === "mercury_ach"
-        ? "ACH bank transfer (arrives in 1–2 business days)"
-        : "Zelle or Venmo (you will receive a separate notification)";
+      let paymentMethodLabel: string;
+      switch (payoutData.paymentMethod) {
+        case "stripe_transfer":
+          paymentMethodLabel = "Direct bank transfer via Stripe (arrives in 1-2 business days)";
+          break;
+        case "zelle":
+          paymentMethodLabel = `Zelle to ${stripeAccount?.fallbackHandle || "your account on file"}`;
+          break;
+        case "venmo":
+          paymentMethodLabel = `Venmo to ${stripeAccount?.fallbackHandle || "your account on file"}`;
+          break;
+        case "mercury_ach":
+          paymentMethodLabel = "ACH bank transfer (arrives in 1-2 business days)";
+          break;
+        default:
+          paymentMethodLabel = "We'll be in touch shortly with payment details";
+      }
 
       await db.collection("mail").add({
         to: [customerEmail],
@@ -1100,7 +1246,7 @@ export const gsResalePayout = onCall(
           subject: `Your Garage Scholars Resale Payout — $${amount.toFixed(2)}`,
           html: `
             <div style="font-family: sans-serif; max-width: 520px; margin: auto;">
-              <h2 style="color: #1a2e1a;">Your item sold! 🎉</h2>
+              <h2 style="color: #1a2e1a;">Your item sold!</h2>
               <p>Hi ${customerName},</p>
               <p>Great news — your consignment item has sold and your payout is on the way.</p>
               <table style="width:100%; border-collapse:collapse; margin: 20px 0;">
@@ -1109,7 +1255,7 @@ export const gsResalePayout = onCall(
                 ${description ? `<tr><td style="padding:8px; color:#555;">Notes</td><td style="padding:8px;">${description}</td></tr>` : ""}
               </table>
               <p>Questions? Reply to this email or contact us at <a href="mailto:admin@garagescholars.com">admin@garagescholars.com</a>.</p>
-              <p style="color:#888; font-size:0.85rem;">Garage Scholars · Denver Metro Area</p>
+              <p style="color:#888; font-size:0.85rem;">Garage Scholars &middot; Denver Metro Area</p>
             </div>
           `,
         },
@@ -1117,18 +1263,316 @@ export const gsResalePayout = onCall(
       });
     }
 
-    // Notify admins if manual payment still needed
-    if (payoutData.status === "pending") {
+    // Notify admins based on status
+    if (payoutData.status === "awaiting_send") {
+      // Zelle/Venmo — admin just needs to send it via the app
       await notifyAdmins(
-        `💰 Resale Payout Required: $${amount} → ${customerName}`,
+        `Resale Payout: $${amount.toFixed(2)} to ${customerName} via ${payoutData.paymentMethod}`,
+        `<p>Resale payout to <strong>${customerName}</strong>: <strong>$${amount.toFixed(2)}</strong></p>
+         <p><strong>Send via ${payoutData.paymentMethod}:</strong> ${payoutData.fallbackHandle}</p>
+         <p>Once sent, mark as paid in the app.</p>`
+      );
+    } else if (payoutData.status === "pending" && payoutData.paymentMethod === "manual") {
+      // No payment info on file at all
+      await notifyAdmins(
+        `Resale Payout Needs Attention: $${amount.toFixed(2)} to ${customerName}`,
         `<p>Resale payout to <strong>${customerName}</strong>: <strong>$${amount.toFixed(2)}</strong></p>
          <p>${description || "No description"}</p>
-         <p><strong>Action needed:</strong> No bank details on file — please pay via Zelle/Venmo manually, then mark as paid in the app.</p>
+         <p><strong>No payment method on file.</strong> Send them a bank link or get their Zelle/Venmo info.</p>
          ${customerEmail ? `<p>Customer email: ${customerEmail}</p>` : ""}`
       );
     }
 
     return { payoutId: payoutRef.id, status: payoutData.status, paymentMethod: payoutData.paymentMethod };
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// 8b. CALLABLE: Save resale customer's Zelle/Venmo handle
+//     Called by admin when customer replies with their info.
+// ═══════════════════════════════════════════════════════════════
+export const gsSaveResalePaymentInfo = onCall(
+  { cors: true, timeoutSeconds: 10 },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Authentication required.");
+    }
+
+    const profileSnap = await db.collection(GS_COLLECTIONS.PROFILES).doc(request.auth.uid).get();
+    if (!profileSnap.exists || profileSnap.data()?.role !== "admin") {
+      throw new HttpsError("permission-denied", "Admin role required.");
+    }
+
+    const { customerEmail, fallbackMethod, fallbackHandle } = request.data as {
+      customerEmail: string;
+      fallbackMethod: "zelle" | "venmo";
+      fallbackHandle: string;
+    };
+
+    if (!customerEmail || !fallbackMethod || !fallbackHandle) {
+      throw new HttpsError("invalid-argument", "customerEmail, fallbackMethod, and fallbackHandle are required.");
+    }
+
+    // Find existing stripe account doc by email
+    const existingSnap = await db
+      .collection(GS_COLLECTIONS.STRIPE_ACCOUNTS)
+      .where("email", "==", customerEmail)
+      .where("accountType", "==", "resale_customer")
+      .limit(1)
+      .get();
+
+    if (!existingSnap.empty) {
+      // Update existing doc
+      await existingSnap.docs[0].ref.update({
+        fallbackMethod,
+        fallbackHandle,
+        fallbackUpdatedAt: FieldValue.serverTimestamp(),
+      });
+    } else {
+      // Create a new doc (customer never got a Stripe link, just gave Zelle/Venmo)
+      await db.collection(GS_COLLECTIONS.STRIPE_ACCOUNTS).add({
+        accountType: "resale_customer",
+        email: customerEmail,
+        customerName: customerEmail, // admin can update later
+        fallbackMethod,
+        fallbackHandle,
+        onboardingComplete: false,
+        payoutsEnabled: false,
+        createdAt: FieldValue.serverTimestamp(),
+        fallbackUpdatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    return { success: true };
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// 8b2. CALLABLE: Admin saves resale customer's bank info for ACH
+// ═══════════════════════════════════════════════════════════════
+export const gsSaveResaleBankInfo = onCall(
+  { cors: true, timeoutSeconds: 10 },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Authentication required.");
+    }
+
+    const profileSnap = await db.collection(GS_COLLECTIONS.PROFILES).doc(request.auth.uid).get();
+    if (!profileSnap.exists || profileSnap.data()?.role !== "admin") {
+      throw new HttpsError("permission-denied", "Admin role required.");
+    }
+
+    const { customerEmail, customerName, routingNumber, accountNumber, accountType } = request.data as {
+      customerEmail: string;
+      customerName: string;
+      routingNumber: string;
+      accountNumber: string;
+      accountType: "checking" | "savings";
+    };
+
+    if (!customerEmail || !customerName || !routingNumber || !accountNumber) {
+      throw new HttpsError("invalid-argument", "customerEmail, customerName, routingNumber, and accountNumber are required.");
+    }
+
+    if (!/^\d{9}$/.test(routingNumber)) {
+      throw new HttpsError("invalid-argument", "Routing number must be exactly 9 digits.");
+    }
+
+    const accountLast4 = accountNumber.slice(-4);
+
+    // Find existing doc by email
+    const existingSnap = await db
+      .collection(GS_COLLECTIONS.STRIPE_ACCOUNTS)
+      .where("email", "==", customerEmail)
+      .where("accountType", "==", "resale_customer")
+      .limit(1)
+      .get();
+
+    const bankData = {
+      accountType: "resale_customer" as const,
+      email: customerEmail,
+      customerName,
+      bankRouting: routingNumber,
+      bankAccount: accountNumber,
+      bankAccountType: accountType || "checking",
+      accountHolderName: customerName,
+      bankLast4: accountLast4,
+      payoutsEnabled: true,
+      onboardingComplete: true,
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+
+    if (!existingSnap.empty) {
+      await existingSnap.docs[0].ref.update(bankData);
+    } else {
+      await db.collection(GS_COLLECTIONS.STRIPE_ACCOUNTS).add({
+        ...bankData,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    return { success: true, bankLast4: accountLast4 };
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// 8c. CALLABLE: Scholar saves their bank info for direct deposit
+//     Stores routing + last4 of account. Full account number only
+//     used at payout time via Mercury ACH.
+// ═══════════════════════════════════════════════════════════════
+export const gsSaveScholarBankInfo = onCall(
+  { cors: true, timeoutSeconds: 10 },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Authentication required.");
+    }
+
+    const userId = request.auth.uid;
+
+    const { routingNumber, accountNumber, accountType, accountHolderName } = request.data as {
+      routingNumber: string;
+      accountNumber: string;
+      accountType: "checking" | "savings";
+      accountHolderName: string;
+    };
+
+    if (!routingNumber || !accountNumber || !accountType || !accountHolderName) {
+      throw new HttpsError("invalid-argument", "routingNumber, accountNumber, accountType, and accountHolderName are required.");
+    }
+
+    // Basic validation
+    if (!/^\d{9}$/.test(routingNumber)) {
+      throw new HttpsError("invalid-argument", "Routing number must be exactly 9 digits.");
+    }
+    if (!/^\d{4,17}$/.test(accountNumber)) {
+      throw new HttpsError("invalid-argument", "Account number must be 4-17 digits.");
+    }
+
+    const accountLast4 = accountNumber.slice(-4);
+
+    // Check for existing bank info doc
+    const existingSnap = await db
+      .collection(GS_COLLECTIONS.STRIPE_ACCOUNTS)
+      .where("userId", "==", userId)
+      .where("accountType", "==", "scholar")
+      .limit(1)
+      .get();
+
+    const bankData = {
+      userId,
+      accountType: "scholar" as const,
+      bankRouting: routingNumber,
+      bankAccount: accountNumber,
+      bankAccountType: accountType,
+      accountHolderName,
+      bankLast4: accountLast4,
+      payoutsEnabled: true,
+      onboardingComplete: true,
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+
+    if (!existingSnap.empty) {
+      await existingSnap.docs[0].ref.update(bankData);
+    } else {
+      await db.collection(GS_COLLECTIONS.STRIPE_ACCOUNTS).add({
+        ...bankData,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    // Update scholar profile
+    await db.collection(GS_COLLECTIONS.SCHOLAR_PROFILES).doc(userId).set({
+      bankLinked: true,
+      bankLast4: accountLast4,
+      bankAccountType: accountType,
+    }, { merge: true });
+
+    return { success: true, bankLast4: accountLast4 };
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// 8d. CALLABLE: Admin files complaint on a job
+//     Holds the 2nd 50% payout, reduces quality score, flags job.
+// ═══════════════════════════════════════════════════════════════
+export const gsAdminComplaint = onCall(
+  { cors: true, timeoutSeconds: 30 },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Authentication required.");
+    }
+
+    const profileSnap = await db.collection(GS_COLLECTIONS.PROFILES).doc(request.auth.uid).get();
+    if (!profileSnap.exists || profileSnap.data()?.role !== "admin") {
+      throw new HttpsError("permission-denied", "Admin role required.");
+    }
+
+    const { jobId, description, scoreReduction } = request.data as {
+      jobId: string;
+      description: string;
+      scoreReduction?: number; // 0-100 percentage to reduce completion score
+    };
+
+    if (!jobId || !description) {
+      throw new HttpsError("invalid-argument", "jobId and description are required.");
+    }
+
+    const jobRef = db.collection(GS_COLLECTIONS.JOBS).doc(jobId);
+    const jobSnap = await jobRef.get();
+    if (!jobSnap.exists) {
+      throw new HttpsError("not-found", "Job not found.");
+    }
+
+    const jobData = jobSnap.data()!;
+    const reduction = Math.min(100, Math.max(0, scoreReduction ?? 50)) / 100;
+
+    // Update quality score
+    const scoreRef = db.collection(GS_COLLECTIONS.JOB_QUALITY_SCORES).doc(jobId);
+    const scoreSnap = await scoreRef.get();
+
+    if (scoreSnap.exists) {
+      const scoreData = scoreSnap.data()!;
+      await scoreRef.update({
+        adminComplaint: true,
+        adminComplaintDetails: description,
+        adminComplaintBy: request.auth.uid,
+        adminComplaintAt: FieldValue.serverTimestamp(),
+        completionScore: Math.max(0, (scoreData.completionScore || 0) * (1 - reduction)),
+      });
+    }
+
+    // Hold any pending completion payout
+    try {
+      await holdCompletionPayout(jobId);
+    } catch (err) {
+      console.error(`holdCompletionPayout failed for admin complaint on job ${jobId}:`, err);
+    }
+
+    // Update job status
+    await jobRef.update({
+      status: "DISPUTED",
+      adminComplaint: true,
+      adminComplaintDescription: description,
+      adminComplaintAt: FieldValue.serverTimestamp(),
+      adminComplaintBy: request.auth.uid,
+    });
+
+    // Notify the scholar
+    const scholarId = jobData.claimedBy;
+    if (scholarId) {
+      const scholarProfile = await db.collection(GS_COLLECTIONS.PROFILES).doc(scholarId).get();
+      const pushToken = scholarProfile.data()?.pushToken;
+      if (pushToken) {
+        await sendExpoPush(
+          [pushToken],
+          "Job Issue Reported",
+          `An issue was reported for "${jobData.title}". Your completion payout is on hold pending review.`,
+          { screen: "my-jobs", jobId }
+        );
+      }
+    }
+
+    return { success: true };
   }
 );
 
@@ -1399,6 +1843,428 @@ export const gsGeneratePaymentReport = onSchedule("0 8 1,16 * *", async () => {
   }
 
   console.log(`Payment period ${periodId}: ${payoutsSnap.size} payouts, $${totalAmount.toFixed(2)}`);
+});
+
+// ═══════════════════════════════════════════════════════════════
+// 10b. SCHEDULED: Weekly Mercury replenishment report (every Monday 8am)
+//      Sums all Mercury ACH payouts for the past week.
+//      Emails admin: "Transfer $X from Chase → Mercury"
+// ═══════════════════════════════════════════════════════════════
+export const gsWeeklyReplenishmentReport = onSchedule("0 8 * * 1", async () => {
+  console.log("Generating weekly Mercury replenishment report...");
+
+  const now = new Date();
+  const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const startTs = Timestamp.fromDate(weekAgo);
+  const endTs = Timestamp.fromDate(now);
+
+  // Get all payouts sent via Mercury this week
+  const mercuryPayouts = await db
+    .collection(GS_COLLECTIONS.PAYOUTS)
+    .where("paymentMethod", "==", "mercury_ach")
+    .where("createdAt", ">=", startTs)
+    .where("createdAt", "<=", endTs)
+    .get();
+
+  // Get all payouts sent via Zelle/Venmo (manually, but still from our accounts)
+  const manualPayouts = await db
+    .collection(GS_COLLECTIONS.PAYOUTS)
+    .where("status", "==", "paid")
+    .where("paidAt", ">=", startTs)
+    .where("paidAt", "<=", endTs)
+    .get();
+
+  let mercuryTotal = 0;
+  let zelleVenmoTotal = 0;
+  const mercuryLines: Array<{ name: string; amount: number; type: string; date: string }> = [];
+  const manualLines: Array<{ name: string; amount: number; method: string; date: string }> = [];
+
+  for (const doc of mercuryPayouts.docs) {
+    const d = doc.data();
+    mercuryTotal += d.amount || 0;
+    mercuryLines.push({
+      name: d.recipientName || "Unknown",
+      amount: d.amount || 0,
+      type: d.splitType || "unknown",
+      date: d.createdAt?.toDate?.()?.toLocaleDateString("en-US") || "",
+    });
+  }
+
+  for (const doc of manualPayouts.docs) {
+    const d = doc.data();
+    const method = d.paymentMethod || "";
+    if (method === "zelle" || method === "venmo" || method.startsWith("manual_")) {
+      zelleVenmoTotal += d.amount || 0;
+      manualLines.push({
+        name: d.recipientName || "Unknown",
+        amount: d.amount || 0,
+        method,
+        date: d.paidAt?.toDate?.()?.toLocaleDateString("en-US") || "",
+      });
+    }
+  }
+
+  const totalOutflow = mercuryTotal + zelleVenmoTotal;
+  const fmt = (n: number) => `$${n.toFixed(2)}`;
+  const weekLabel = `${weekAgo.toLocaleDateString("en-US")} – ${now.toLocaleDateString("en-US")}`;
+
+  // Mercury line items table
+  const mercuryRows = mercuryLines
+    .sort((a, b) => b.amount - a.amount)
+    .map((l) => `<tr><td>${l.name}</td><td>${l.type}</td><td>${l.date}</td><td><strong>${fmt(l.amount)}</strong></td></tr>`)
+    .join("");
+
+  const manualRows = manualLines
+    .sort((a, b) => b.amount - a.amount)
+    .map((l) => `<tr><td>${l.name}</td><td>${l.method}</td><td>${l.date}</td><td><strong>${fmt(l.amount)}</strong></td></tr>`)
+    .join("");
+
+  const thStyle = `style="background:#1a2e1a; color:#fff; text-align:left; padding:8px;"`;
+  const tdStyle = `style="padding:8px; border-bottom:1px solid #eee;"`;
+
+  const reportHtml = `
+    <div style="font-family: sans-serif; max-width: 640px; margin: auto;">
+      <h2 style="color: #1a2e1a;">Weekly Replenishment Report</h2>
+      <p style="color:#555;">${weekLabel}</p>
+
+      <div style="background:#f0fdf4; border:2px solid #10b981; border-radius:12px; padding:20px; margin:20px 0; text-align:center;">
+        <p style="margin:0; color:#555; font-size:14px;">Transfer from Chase to Mercury</p>
+        <p style="margin:8px 0 0; font-size:32px; font-weight:800; color:#1a2e1a;">${fmt(mercuryTotal)}</p>
+        <p style="margin:4px 0 0; color:#888; font-size:12px;">To replenish Mercury for ACH payouts this week</p>
+      </div>
+
+      <h3 style="color:#1a2e1a;">Summary</h3>
+      <table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
+        <tr><td ${tdStyle}>Mercury ACH Payouts</td><td ${tdStyle}><strong>${fmt(mercuryTotal)}</strong> (${mercuryPayouts.size} payouts)</td></tr>
+        <tr><td ${tdStyle}>Zelle/Venmo Payouts</td><td ${tdStyle}><strong>${fmt(zelleVenmoTotal)}</strong> (${manualLines.length} payouts)</td></tr>
+        <tr style="background:#f8f9fa;"><td ${tdStyle}><strong>Total Outflow</strong></td><td ${tdStyle}><strong>${fmt(totalOutflow)}</strong></td></tr>
+      </table>
+
+      ${mercuryLines.length > 0 ? `
+        <h3 style="color:#1a2e1a;">Mercury ACH Detail</h3>
+        <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse; width:100%; margin-bottom:24px;">
+          <tr><th ${thStyle}>Recipient</th><th ${thStyle}>Type</th><th ${thStyle}>Date</th><th ${thStyle}>Amount</th></tr>
+          ${mercuryRows}
+        </table>
+      ` : ""}
+
+      ${manualLines.length > 0 ? `
+        <h3 style="color:#1a2e1a;">Zelle/Venmo Detail</h3>
+        <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse; width:100%; margin-bottom:24px;">
+          <tr><th ${thStyle}>Recipient</th><th ${thStyle}>Method</th><th ${thStyle}>Date</th><th ${thStyle}>Amount</th></tr>
+          ${manualRows}
+        </table>
+      ` : ""}
+
+      <p style="color:#888; font-size:0.85rem;">Garage Scholars Payment System &middot; Auto-generated weekly report</p>
+    </div>
+  `;
+
+  // Email admins who have weeklyReport enabled
+  const adminEmails = await getAdminEmails("weeklyReport");
+  const emailTo = adminEmails.length > 0 ? adminEmails : ["garagescholars@gmail.com"];
+  await db.collection("mail").add({
+    to: emailTo,
+    message: {
+      subject: `Weekly Replenishment: Transfer ${fmt(mercuryTotal)} to Mercury (${weekLabel})`,
+      html: reportHtml,
+    },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  // Push notify admins
+  const adminTokens = await getAdminTokens("weeklyReport");
+  if (adminTokens.length > 0) {
+    await sendExpoPush(
+      adminTokens,
+      "Mercury Replenishment Needed",
+      `Transfer ${fmt(mercuryTotal)} from Chase to Mercury to cover last week's payouts.`,
+      { screen: "admin-payouts" }
+    );
+  }
+
+  // Save replenishment request in Firestore for admin approval flow
+  await db.collection(GS_COLLECTIONS.PLATFORM_CONFIG).doc("mercuryReplenishment").set({
+    amount: mercuryTotal,
+    weekLabel,
+    status: "pending_approval",
+    mercuryPayoutCount: mercuryPayouts.size,
+    manualPayoutCount: manualLines.length,
+    totalOutflow,
+    createdAt: FieldValue.serverTimestamp(),
+    approvedBy: null,
+    approvedAt: null,
+    transferId: null,
+  });
+
+  // CPA does NOT get the replenishment report — only the biweekly payout summary
+
+  console.log(`Weekly replenishment report: Mercury=${fmt(mercuryTotal)}, Manual=${fmt(zelleVenmoTotal)}, Total=${fmt(totalOutflow)}`);
+});
+
+// ═══════════════════════════════════════════════════════════════
+// 10c. CALLABLE: Admin approves Mercury funding (pull from Chase)
+// ═══════════════════════════════════════════════════════════════
+export const gsFundMercuryFromChase = onCall(
+  { cors: true, timeoutSeconds: 60 },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Authentication required.");
+    }
+
+    const profileSnap = await db.collection(GS_COLLECTIONS.PROFILES).doc(request.auth.uid).get();
+    if (!profileSnap.exists || profileSnap.data()?.role !== "admin") {
+      throw new HttpsError("permission-denied", "Admin role required.");
+    }
+
+    const { amount } = request.data as { amount?: number };
+    if (!amount || amount <= 0) {
+      throw new HttpsError("invalid-argument", "Amount must be greater than 0.");
+    }
+
+    // Get Mercury config
+    const mercuryConfig = await getMercuryConfig();
+    if (!mercuryConfig) {
+      throw new HttpsError("failed-precondition", "Mercury is not configured. Set MERCURY_API_KEY and mercuryAccountId.");
+    }
+
+    // Get linked Chase account ID from platform config
+    const configSnap = await db.collection(GS_COLLECTIONS.PLATFORM_CONFIG).doc("payments").get();
+    const linkedChaseAccountId = configSnap.data()?.mercuryLinkedChaseAccountId;
+    if (!linkedChaseAccountId) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Chase account not linked in Mercury. Add mercuryLinkedChaseAccountId to gs_platformConfig/payments."
+      );
+    }
+
+    // Call Mercury API to pull funds from Chase
+    try {
+      const response = await fetch(
+        `https://api.mercury.com/api/v1/account/${mercuryConfig.accountId}/transactions`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${mercuryConfig.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            amount,
+            paymentMethod: "ach",
+            externalAccountId: linkedChaseAccountId,
+            direction: "debit", // Pull FROM Chase INTO Mercury
+            note: `Weekly replenishment from Chase - ${new Date().toLocaleDateString("en-US")}`,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Mercury API error ${response.status}: ${errText}`);
+      }
+
+      const data = await response.json() as any;
+
+      // Record the transfer
+      await db.collection("gs_mercuryTransfers").add({
+        transferId: data.id || null,
+        amount,
+        direction: "chase_to_mercury",
+        status: "processing",
+        approvedBy: request.auth.uid,
+        approvedByName: profileSnap.data()?.fullName || "Admin",
+        approvedAt: FieldValue.serverTimestamp(),
+        createdAt: FieldValue.serverTimestamp(),
+      });
+
+      // Update the pending replenishment doc
+      await db.collection(GS_COLLECTIONS.PLATFORM_CONFIG).doc("mercuryReplenishment").update({
+        status: "approved",
+        approvedBy: request.auth.uid,
+        approvedAt: FieldValue.serverTimestamp(),
+        transferId: data.id || null,
+      });
+
+      // Push notify all admins
+      const adminTokens = await getAdminTokens("mercuryAlerts");
+      if (adminTokens.length > 0) {
+        const adminName = profileSnap.data()?.fullName || "Admin";
+        await sendExpoPush(
+          adminTokens,
+          "Mercury Funded",
+          `${adminName} approved $${amount.toFixed(2)} transfer from Chase to Mercury.`,
+          { screen: "admin-payouts" }
+        );
+      }
+
+      return { ok: true, transferId: data.id || null, status: "processing" };
+    } catch (err) {
+      console.error("Mercury funding failed:", err);
+      throw new HttpsError("internal", (err as Error).message || "Failed to initiate Mercury funding.");
+    }
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// 10d. SCHEDULED: Biweekly CPA reconciliation report (1st and 16th)
+// ═══════════════════════════════════════════════════════════════
+export const gsCpaReconciliationReport = onSchedule("0 9 1,16 * *", async () => {
+  console.log("Generating CPA reconciliation report...");
+
+  const configSnap = await db.collection(GS_COLLECTIONS.PLATFORM_CONFIG).doc("payments").get();
+  const cpaEmail = configSnap.data()?.cpaEmail;
+  if (!cpaEmail) {
+    console.log("No CPA email configured — skipping reconciliation report.");
+    return;
+  }
+
+  // Determine the reporting period (last 2 weeks)
+  const now = new Date();
+  const periodEnd = now;
+  const periodStart = new Date(now.getTime() - 15 * 24 * 60 * 60 * 1000);
+  const startTs = Timestamp.fromDate(periodStart);
+  const endTs = Timestamp.fromDate(periodEnd);
+  const fmt = (n: number) => `$${n.toFixed(2)}`;
+  const periodLabel = `${periodStart.toLocaleDateString("en-US")} – ${now.toLocaleDateString("en-US")}`;
+
+  // 1. Get all payouts (money OUT via Mercury ACH)
+  const payoutsSnap = await db
+    .collection(GS_COLLECTIONS.PAYOUTS)
+    .where("createdAt", ">=", startTs)
+    .where("createdAt", "<=", endTs)
+    .get();
+
+  let totalPayouts = 0;
+  const payoutRows: string[] = [];
+  for (const d of payoutsSnap.docs) {
+    const p = d.data();
+    totalPayouts += p.amount || 0;
+    payoutRows.push(
+      `<tr><td style="padding:6px 8px;border-bottom:1px solid #eee;">${p.recipientName || "Unknown"}</td>` +
+      `<td style="padding:6px 8px;border-bottom:1px solid #eee;">${p.splitType || p.payoutType || "—"}</td>` +
+      `<td style="padding:6px 8px;border-bottom:1px solid #eee;">${p.paymentMethod || "—"}</td>` +
+      `<td style="padding:6px 8px;border-bottom:1px solid #eee;">${p.createdAt?.toDate?.()?.toLocaleDateString("en-US") || "—"}</td>` +
+      `<td style="padding:6px 8px;border-bottom:1px solid #eee;font-weight:700;">${fmt(p.amount || 0)}</td></tr>`
+    );
+  }
+
+  // 2. Get all Stripe payments (money IN from customers)
+  const paymentsSnap = await db
+    .collection(GS_COLLECTIONS.CUSTOMER_PAYMENTS)
+    .where("createdAt", ">=", startTs)
+    .where("createdAt", "<=", endTs)
+    .get();
+
+  let totalStripeIn = 0;
+  const stripeRows: string[] = [];
+  for (const d of paymentsSnap.docs) {
+    const p = d.data();
+    totalStripeIn += p.amount || 0;
+    stripeRows.push(
+      `<tr><td style="padding:6px 8px;border-bottom:1px solid #eee;">${p.customerName || p.customerEmail || "Unknown"}</td>` +
+      `<td style="padding:6px 8px;border-bottom:1px solid #eee;">${p.description || p.packageType || "—"}</td>` +
+      `<td style="padding:6px 8px;border-bottom:1px solid #eee;">${p.paymentMethod || "stripe"}</td>` +
+      `<td style="padding:6px 8px;border-bottom:1px solid #eee;">${p.createdAt?.toDate?.()?.toLocaleDateString("en-US") || "—"}</td>` +
+      `<td style="padding:6px 8px;border-bottom:1px solid #eee;font-weight:700;">${fmt(p.amount || 0)}</td></tr>`
+    );
+  }
+
+  // 3. Get Mercury transfer records (Chase → Mercury funding)
+  const transfersSnap = await db
+    .collection("gs_mercuryTransfers")
+    .where("createdAt", ">=", startTs)
+    .where("createdAt", "<=", endTs)
+    .get();
+
+  let totalTransfers = 0;
+  const transferRows: string[] = [];
+  for (const d of transfersSnap.docs) {
+    const t = d.data();
+    totalTransfers += t.amount || 0;
+    transferRows.push(
+      `<tr><td style="padding:6px 8px;border-bottom:1px solid #eee;">Chase → Mercury</td>` +
+      `<td style="padding:6px 8px;border-bottom:1px solid #eee;">${t.approvedByName || "Admin"}</td>` +
+      `<td style="padding:6px 8px;border-bottom:1px solid #eee;">${t.createdAt?.toDate?.()?.toLocaleDateString("en-US") || "—"}</td>` +
+      `<td style="padding:6px 8px;border-bottom:1px solid #eee;font-weight:700;">${fmt(t.amount || 0)}</td></tr>`
+    );
+  }
+
+  const thStyle = `style="background:#1a2e1a;color:#fff;text-align:left;padding:8px;"`;
+
+  const reportHtml = `
+    <div style="font-family:sans-serif;max-width:700px;margin:auto;">
+      <h2 style="color:#1a2e1a;">Garage Scholars — CPA Reconciliation Report</h2>
+      <p style="color:#555;">Period: <strong>${periodLabel}</strong></p>
+
+      <div style="background:#f0f9ff;border:2px solid #3b82f6;border-radius:12px;padding:20px;margin:20px 0;">
+        <p style="margin:0;color:#555;font-size:14px;">
+          Please reconcile the transactions below against the <strong>Chase business checking account</strong> statement for this period.
+          All outgoing payments are routed through Mercury ACH. All incoming payments are processed via Stripe and deposited to Chase.
+        </p>
+      </div>
+
+      <h3 style="color:#1a2e1a;">Summary</h3>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
+        <tr><td style="padding:8px;border-bottom:1px solid #eee;">Stripe Deposits (Money In)</td>
+            <td style="padding:8px;border-bottom:1px solid #eee;font-weight:700;color:#10b981;">+${fmt(totalStripeIn)}</td></tr>
+        <tr><td style="padding:8px;border-bottom:1px solid #eee;">Mercury ACH Payouts (Money Out)</td>
+            <td style="padding:8px;border-bottom:1px solid #eee;font-weight:700;color:#ef4444;">-${fmt(totalPayouts)}</td></tr>
+        <tr><td style="padding:8px;border-bottom:1px solid #eee;">Chase → Mercury Transfers</td>
+            <td style="padding:8px;border-bottom:1px solid #eee;font-weight:700;">${fmt(totalTransfers)}</td></tr>
+        <tr style="background:#f8f9fa;">
+            <td style="padding:8px;font-weight:700;">Net (In - Out)</td>
+            <td style="padding:8px;font-weight:700;">${fmt(totalStripeIn - totalPayouts)}</td></tr>
+      </table>
+
+      ${stripeRows.length > 0 ? `
+        <h3 style="color:#1a2e1a;">Stripe Payments (Money In → Chase)</h3>
+        <p style="color:#888;font-size:12px;">These should appear as Stripe deposits on the Chase statement.</p>
+        <table border="1" cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;margin-bottom:24px;font-size:13px;">
+          <tr><th ${thStyle}>Customer</th><th ${thStyle}>Description</th><th ${thStyle}>Method</th><th ${thStyle}>Date</th><th ${thStyle}>Amount</th></tr>
+          ${stripeRows.join("")}
+        </table>
+      ` : "<p><em>No Stripe payments this period.</em></p>"}
+
+      ${payoutRows.length > 0 ? `
+        <h3 style="color:#1a2e1a;">Payouts (Money Out via Mercury ACH)</h3>
+        <p style="color:#888;font-size:12px;">These are funded from Mercury. Chase statement will show the bulk Chase → Mercury transfers below.</p>
+        <table border="1" cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;margin-bottom:24px;font-size:13px;">
+          <tr><th ${thStyle}>Recipient</th><th ${thStyle}>Type</th><th ${thStyle}>Method</th><th ${thStyle}>Date</th><th ${thStyle}>Amount</th></tr>
+          ${payoutRows.join("")}
+        </table>
+      ` : "<p><em>No payouts this period.</em></p>"}
+
+      ${transferRows.length > 0 ? `
+        <h3 style="color:#1a2e1a;">Chase → Mercury Transfers</h3>
+        <p style="color:#888;font-size:12px;">These should appear as ACH debits on the Chase statement to Mercury.</p>
+        <table border="1" cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;margin-bottom:24px;font-size:13px;">
+          <tr><th ${thStyle}>Transfer</th><th ${thStyle}>Approved By</th><th ${thStyle}>Date</th><th ${thStyle}>Amount</th></tr>
+          ${transferRows.join("")}
+        </table>
+      ` : "<p><em>No Chase → Mercury transfers this period.</em></p>"}
+
+      <div style="background:#fffbeb;border:1px solid #f59e0b40;border-radius:8px;padding:14px;margin:20px 0;">
+        <p style="margin:0;color:#92400e;font-size:13px;">
+          <strong>Reconciliation Notes:</strong> The individual Mercury ACH payouts will NOT appear on the Chase statement.
+          Only the bulk Chase → Mercury transfers will show. Match the transfer totals against the payout detail above.
+          Stripe deposits may appear 1-2 business days after the transaction date.
+        </p>
+      </div>
+
+      <p style="color:#888;font-size:0.85rem;">Garage Scholars Payment System &middot; Auto-generated biweekly CPA report</p>
+    </div>
+  `;
+
+  await db.collection("mail").add({
+    to: [cpaEmail],
+    message: {
+      subject: `GS Reconciliation Report: ${periodLabel} — ${fmt(totalStripeIn)} in, ${fmt(totalPayouts)} out`,
+      html: reportHtml,
+    },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  console.log(`CPA report sent: Stripe in=${fmt(totalStripeIn)}, Payouts out=${fmt(totalPayouts)}, Transfers=${fmt(totalTransfers)}`);
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -1886,5 +2752,118 @@ export const gsCheckMissedBalanceInvoices = onSchedule(
     }
 
     console.log(`[gsCheckMissedBalanceInvoices] Done. Recovered ${sent} missed balance invoices.`);
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// 15. CALLABLE: Email resale customer requesting bank info
+// ═══════════════════════════════════════════════════════════════
+export const gsSendResalePaymentLink = onCall(
+  { cors: true, timeoutSeconds: 30 },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Authentication required.");
+    }
+
+    // Verify admin
+    const profileSnap = await db.collection(GS_COLLECTIONS.PROFILES).doc(request.auth.uid).get();
+    if (!profileSnap.exists || profileSnap.data()?.role !== "admin") {
+      throw new HttpsError("permission-denied", "Admin role required.");
+    }
+
+    const { customerName, customerEmail, customMessage } = request.data as {
+      customerName: string;
+      customerEmail: string;
+      customMessage?: string;
+    };
+
+    if (!customerName || !customerEmail) {
+      throw new HttpsError("invalid-argument", "customerName and customerEmail are required.");
+    }
+
+    // Check for existing account record
+    const existingSnap = await db
+      .collection(GS_COLLECTIONS.STRIPE_ACCOUNTS)
+      .where("email", "==", customerEmail)
+      .where("accountType", "==", "resale_customer")
+      .limit(1)
+      .get();
+
+    let accountDocId: string;
+    let alreadyHasBankInfo = false;
+
+    if (!existingSnap.empty) {
+      accountDocId = existingSnap.docs[0].id;
+      const existing = existingSnap.docs[0].data();
+      alreadyHasBankInfo = !!existing.bankRouting || !!existing.fallbackMethod;
+
+      await existingSnap.docs[0].ref.update({
+        customerName,
+        lastLinkSentAt: FieldValue.serverTimestamp(),
+        lastLinkSentBy: request.auth.uid,
+      });
+    } else {
+      const docRef = await db.collection(GS_COLLECTIONS.STRIPE_ACCOUNTS).add({
+        accountType: "resale_customer",
+        email: customerEmail,
+        customerName,
+        onboardingComplete: false,
+        payoutsEnabled: false,
+        lastLinkSentAt: FieldValue.serverTimestamp(),
+        lastLinkSentBy: request.auth.uid,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      accountDocId = docRef.id;
+    }
+
+    // Email the customer
+    const customMsgHtml = customMessage
+      ? `<p style="color:#555; margin-top:16px;">${customMessage}</p>`
+      : "";
+
+    await db.collection("mail").add({
+      to: [customerEmail],
+      message: {
+        subject: "Garage Scholars — Set Up Your Payout Info",
+        html: `
+          <div style="font-family: sans-serif; max-width: 560px; margin: auto;">
+            <h2 style="color: #1a2e1a;">Get Paid for Your Items</h2>
+            <p>Hi ${customerName},</p>
+            <p>We need your payment info so we can pay you when your consignment items sell.</p>
+            ${customMsgHtml}
+
+            <div style="background:#f8f9fa; border-radius:12px; padding:20px; margin:24px 0;">
+              <p style="font-weight:700; color:#1a2e1a; margin-top:0;">Direct Deposit (ACH)</p>
+              <p style="color:#555; margin-bottom:0;">Reply to this email with:</p>
+              <ul style="color:#555;">
+                <li>Name on bank account</li>
+                <li>Routing number (9 digits)</li>
+                <li>Account number</li>
+                <li>Checking or Savings</li>
+              </ul>
+            </div>
+
+            <p style="color:#888; font-size:0.9rem;">Once we have your info, all future payouts will be sent automatically when your items sell. You only need to do this once.</p>
+            <p style="color:#888; font-size:0.85rem;">Questions? Reply to this email or contact us at <a href="mailto:admin@garagescholars.com">admin@garagescholars.com</a>.</p>
+            <p style="color:#aaa; font-size:0.8rem;">Garage Scholars &middot; Denver Metro Area</p>
+          </div>
+        `,
+      },
+      createdAt: FieldValue.serverTimestamp(),
+    });
+
+    // Notify admins
+    await notifyAdmins(
+      `Payment info request sent to ${customerName}`,
+      `<p>Payout info request emailed to <strong>${customerName}</strong> (${customerEmail}).</p>
+       <p>When they reply with bank details, enter it in the Payouts page.</p>
+       ${alreadyHasBankInfo ? "<p><em>Note: This customer already has payment info on file.</em></p>" : ""}`
+    );
+
+    return {
+      success: true,
+      alreadyHasBankInfo,
+      accountDocId,
+    };
   }
 );

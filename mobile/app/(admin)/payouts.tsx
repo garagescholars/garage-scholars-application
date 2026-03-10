@@ -16,9 +16,11 @@ import {
   onSnapshot,
   updateDoc,
   doc,
+  getDoc,
 } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
 import { Ionicons } from "@expo/vector-icons";
-import { db } from "../../src/lib/firebase";
+import { db, functions } from "../../src/lib/firebase";
 import { COLLECTIONS } from "../../src/constants/collections";
 import { useResponsive } from "../../src/lib/responsive";
 import { downloadCSV } from "../../src/lib/csvExport";
@@ -183,7 +185,84 @@ export default function PayoutsScreen() {
   const [markPaidModal, setMarkPaidModal] = useState<Payout | null>(null);
   const [paymentMethod, setPaymentMethod] = useState("Venmo");
   const [transactionNote, setTransactionNote] = useState("");
+
+  // Send Bank Link / Save Payment Info modal state
+  const [bankLinkModal, setBankLinkModal] = useState(false);
+  const [blName, setBlName] = useState("");
+  const [blEmail, setBlEmail] = useState("");
+  const [blMessage, setBlMessage] = useState("");
+  const [blSending, setBlSending] = useState(false);
+  // Tabs: email request, save bank info, save zelle/venmo
+  const [blTab, setBlTab] = useState<"email" | "bank_info" | "zelle_venmo">("email");
+  const [blFallbackMethod, setBlFallbackMethod] = useState<"zelle" | "venmo">("zelle");
+  const [blFallbackHandle, setBlFallbackHandle] = useState("");
+  const [blFallbackSaving, setBlFallbackSaving] = useState(false);
+  // Direct bank info entry
+  const [blRouting, setBlRouting] = useState("");
+  const [blAccount, setBlAccount] = useState("");
+  const [blAccountType, setBlAccountType] = useState<"checking" | "savings">("checking");
+  const [blBankSaving, setBlBankSaving] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+
+  // Mercury funding state
+  const [mercuryReplenishment, setMercuryReplenishment] = useState<{
+    amount: number;
+    weekLabel: string;
+    status: string;
+    approvedBy?: string;
+  } | null>(null);
+  const [fundingMercury, setFundingMercury] = useState(false);
+
+  // ---------- Mercury replenishment listener ----------
+  useEffect(() => {
+    if (!db) return;
+    const unsub = onSnapshot(
+      doc(db, "gs_platformConfig", "mercuryReplenishment"),
+      (snap) => {
+        if (snap.exists()) {
+          const d = snap.data();
+          setMercuryReplenishment({
+            amount: d.amount || 0,
+            weekLabel: d.weekLabel || "",
+            status: d.status || "pending_approval",
+            approvedBy: d.approvedBy || undefined,
+          });
+        }
+      }
+    );
+    return () => unsub();
+  }, []);
+
+  const handleFundMercury = async () => {
+    if (!mercuryReplenishment || mercuryReplenishment.amount <= 0) return;
+
+    const confirmMsg = `Transfer $${mercuryReplenishment.amount.toFixed(2)} from Chase to Mercury?`;
+    const proceed = await new Promise<boolean>((resolve) => {
+      if (Platform.OS === "web") {
+        resolve(confirm(confirmMsg));
+      } else {
+        Alert.alert("Confirm Transfer", confirmMsg, [
+          { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+          { text: "Approve & Transfer", onPress: () => resolve(true) },
+        ]);
+      }
+    });
+
+    if (!proceed) return;
+
+    setFundingMercury(true);
+    try {
+      const callable = httpsCallable(functions, "gsFundMercuryFromChase");
+      await callable({ amount: mercuryReplenishment.amount });
+      const msg = `Transfer of $${mercuryReplenishment.amount.toFixed(2)} initiated! ACH pull from Chase typically takes 1-2 business days.`;
+      Platform.OS === "web" ? alert(msg) : Alert.alert("Transfer Initiated", msg);
+    } catch (err: any) {
+      const msg = err?.message || "Failed to initiate transfer.";
+      Platform.OS === "web" ? alert(msg) : Alert.alert("Error", msg);
+    } finally {
+      setFundingMercury(false);
+    }
+  };
 
   // ---------- Real-time listener ----------
   useEffect(() => {
@@ -298,6 +377,131 @@ export default function PayoutsScreen() {
 
     await downloadCSV(csv, `1099-data-${currentYear}.csv`);
   }, [payouts]);
+
+  // ---------- Send Bank Link ----------
+  const handleSendBankLink = useCallback(async () => {
+    if (!functions || !blName.trim() || !blEmail.trim()) return;
+
+    setBlSending(true);
+    try {
+      const callable = httpsCallable(functions, "gsSendResalePaymentLink");
+      const result = await callable({
+        customerName: blName.trim(),
+        customerEmail: blEmail.trim(),
+        customMessage: blMessage.trim() || undefined,
+      });
+
+      const data = result.data as { success?: boolean; alreadyComplete?: boolean };
+      const msg = data.alreadyComplete
+        ? `Link sent to ${blEmail}. Note: this customer already completed onboarding previously.`
+        : `Bank link emailed to ${blEmail} successfully!`;
+
+      if (Platform.OS === "web") {
+        alert(msg);
+      } else {
+        Alert.alert("Sent", msg);
+      }
+
+      setBankLinkModal(false);
+      setBlName("");
+      setBlEmail("");
+      setBlMessage("");
+    } catch (err: any) {
+      const msg = err?.message || "Failed to send bank link.";
+      if (Platform.OS === "web") {
+        setError(msg);
+      } else {
+        Alert.alert("Error", msg);
+      }
+    } finally {
+      setBlSending(false);
+    }
+  }, [blName, blEmail, blMessage]);
+
+  // ---------- Save Zelle/Venmo ----------
+  const handleSaveFallback = useCallback(async () => {
+    if (!functions || !blEmail.trim() || !blFallbackHandle.trim()) return;
+
+    setBlFallbackSaving(true);
+    try {
+      const callable = httpsCallable(functions, "gsSaveResalePaymentInfo");
+      await callable({
+        customerEmail: blEmail.trim(),
+        fallbackMethod: blFallbackMethod,
+        fallbackHandle: blFallbackHandle.trim(),
+      });
+
+      const label = blFallbackMethod === "zelle" ? "Zelle" : "Venmo";
+      const msg = `${label} info saved for ${blEmail}. Payouts will auto-route to ${blFallbackHandle.trim()}.`;
+
+      if (Platform.OS === "web") {
+        alert(msg);
+      } else {
+        Alert.alert("Saved", msg);
+      }
+
+      setBankLinkModal(false);
+      setBlEmail("");
+      setBlName("");
+      setBlFallbackHandle("");
+      setBlTab("bank");
+    } catch (err: any) {
+      const msg = err?.message || "Failed to save payment info.";
+      if (Platform.OS === "web") {
+        setError(msg);
+      } else {
+        Alert.alert("Error", msg);
+      }
+    } finally {
+      setBlFallbackSaving(false);
+    }
+  }, [blEmail, blFallbackMethod, blFallbackHandle]);
+
+  // ---------- Save Bank Info (routing + account) ----------
+  const handleSaveBankInfo = useCallback(async () => {
+    if (!functions || !blEmail.trim() || !blName.trim() || !blRouting.trim() || !blAccount.trim()) return;
+
+    if (!/^\d{9}$/.test(blRouting)) {
+      setError("Routing number must be exactly 9 digits.");
+      return;
+    }
+
+    setBlBankSaving(true);
+    try {
+      // Save bank info to the resale customer's record
+      const callable = httpsCallable(functions, "gsSaveResaleBankInfo");
+      await callable({
+        customerEmail: blEmail.trim(),
+        customerName: blName.trim(),
+        routingNumber: blRouting.trim(),
+        accountNumber: blAccount.trim(),
+        accountType: blAccountType,
+      });
+
+      const msg = `Bank info saved for ${blName.trim()} (****${blAccount.slice(-4)}). Mercury ACH payouts are now active.`;
+      if (Platform.OS === "web") {
+        alert(msg);
+      } else {
+        Alert.alert("Saved", msg);
+      }
+
+      setBankLinkModal(false);
+      setBlEmail("");
+      setBlName("");
+      setBlRouting("");
+      setBlAccount("");
+      setBlTab("email");
+    } catch (err: any) {
+      const msg = err?.message || "Failed to save bank info.";
+      if (Platform.OS === "web") {
+        setError(msg);
+      } else {
+        Alert.alert("Error", msg);
+      }
+    } finally {
+      setBlBankSaving(false);
+    }
+  }, [blEmail, blName, blRouting, blAccount, blAccountType]);
 
   // ---------- Computed values ----------
   const pendingTotal = payouts
@@ -453,14 +657,24 @@ export default function PayoutsScreen() {
             Track and manage scholar payments
           </Text>
         </View>
-        <TouchableOpacity
-          style={styles.exportBtn}
-          onPress={handleExportCSV}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="download-outline" size={16} color="#fff" />
-          <Text style={styles.exportBtnText}>Export for Taxes</Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <TouchableOpacity
+            style={styles.bankLinkBtn}
+            onPress={() => setBankLinkModal(true)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="link-outline" size={16} color="#fff" />
+            <Text style={styles.exportBtnText}>Send Bank Link</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.exportBtn}
+            onPress={handleExportCSV}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="download-outline" size={16} color="#fff" />
+            <Text style={styles.exportBtnText}>Export for Taxes</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Error banner */}
@@ -473,6 +687,86 @@ export default function PayoutsScreen() {
           </TouchableOpacity>
         </View>
       ) : null}
+
+      {/* Mercury Funding Card — always visible for admins */}
+      <View style={[
+        styles.mercuryCard,
+        mercuryReplenishment?.status === "approved" && { borderColor: "#10b98140", backgroundColor: "#10b98110" },
+        (!mercuryReplenishment || mercuryReplenishment.status === "idle") && { borderColor: "#3b82f640", backgroundColor: "#3b82f610" },
+      ]}>
+        <View style={styles.mercuryHeader}>
+          <View style={[
+            styles.mercuryIconWrap,
+            mercuryReplenishment?.status === "approved" && { backgroundColor: "#10b98120" },
+            (!mercuryReplenishment || mercuryReplenishment.status === "idle") && { backgroundColor: "#3b82f620" },
+          ]}>
+            <Ionicons
+              name={mercuryReplenishment?.status === "approved" ? "checkmark-circle" : mercuryReplenishment?.status === "pending_approval" ? "alert-circle" : "business-outline"}
+              size={24}
+              color={mercuryReplenishment?.status === "approved" ? "#10b981" : mercuryReplenishment?.status === "pending_approval" ? "#f59e0b" : "#3b82f6"}
+            />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[
+              styles.mercuryTitle,
+              mercuryReplenishment?.status === "approved" && { color: "#10b981" },
+              (!mercuryReplenishment || mercuryReplenishment.status === "idle") && { color: "#3b82f6" },
+            ]}>
+              {mercuryReplenishment?.status === "approved"
+                ? "Mercury Funded"
+                : mercuryReplenishment?.status === "pending_approval"
+                ? "Mercury Replenishment Needed"
+                : "Mercury ACH Payouts"}
+            </Text>
+            <Text style={styles.mercuryWeek}>
+              {mercuryReplenishment?.status === "approved"
+                ? `$${mercuryReplenishment.amount.toFixed(2)} transfer processing (1-2 business days)`
+                : mercuryReplenishment?.status === "pending_approval"
+                ? mercuryReplenishment.weekLabel
+                : "Chase \u2192 Mercury \u2192 Scholar bank accounts"}
+            </Text>
+          </View>
+        </View>
+
+        {/* Show amount + approve button when pending */}
+        {mercuryReplenishment?.status === "pending_approval" && mercuryReplenishment.amount > 0 && (
+          <>
+            <Text style={styles.mercuryAmount}>${mercuryReplenishment.amount.toFixed(2)}</Text>
+            <Text style={styles.mercuryDesc}>
+              Transfer this amount from Chase to Mercury to cover last week's ACH payouts.
+            </Text>
+            <TouchableOpacity
+              style={[styles.mercuryBtn, fundingMercury && { opacity: 0.6 }]}
+              onPress={handleFundMercury}
+              disabled={fundingMercury}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="arrow-forward-circle" size={20} color="#fff" />
+              <Text style={styles.mercuryBtnText}>
+                {fundingMercury ? "Initiating Transfer..." : "Approve & Fund Mercury"}
+              </Text>
+            </TouchableOpacity>
+          </>
+        )}
+
+        {/* Show idle state info */}
+        {(!mercuryReplenishment || mercuryReplenishment.status === "idle") && (
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
+            <View style={styles.mercuryChip}>
+              <Ionicons name="shield-checkmark-outline" size={14} color="#3b82f6" />
+              <Text style={styles.mercuryChipText}>ACH Direct Deposit</Text>
+            </View>
+            <View style={styles.mercuryChip}>
+              <Ionicons name="time-outline" size={14} color="#3b82f6" />
+              <Text style={styles.mercuryChipText}>50% at check-in, 50% after review</Text>
+            </View>
+            <View style={styles.mercuryChip}>
+              <Ionicons name="notifications-outline" size={14} color="#3b82f6" />
+              <Text style={styles.mercuryChipText}>Weekly replenishment alerts</Text>
+            </View>
+          </View>
+        )}
+      </View>
 
       {/* Summary cards */}
       {renderSummaryCards()}
@@ -586,6 +880,231 @@ export default function PayoutsScreen() {
           </View>
         </TouchableOpacity>
       </Modal>
+
+      {/* Resale Customer Payment Info Modal */}
+      <Modal
+        visible={bankLinkModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (!blSending && !blFallbackSaving && !blBankSaving) {
+            setBankLinkModal(false);
+            setBlName(""); setBlEmail(""); setBlMessage("");
+            setBlFallbackHandle(""); setBlRouting(""); setBlAccount("");
+            setBlTab("email");
+          }
+        }}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => {
+            if (blSending || blFallbackSaving || blBankSaving) return;
+            setBankLinkModal(false);
+            setBlName(""); setBlEmail(""); setBlMessage("");
+            setBlFallbackHandle(""); setBlRouting(""); setBlAccount("");
+            setBlTab("email");
+          }}
+        >
+          <View
+            style={[styles.modalContent, isDesktop && styles.modalContentDesktop]}
+            onStartShouldSetResponder={() => true}
+          >
+            <Text style={styles.modalTitle}>Resale Customer Payment</Text>
+
+            {/* 3 Tab switcher */}
+            <View style={styles.tabRow}>
+              <TouchableOpacity
+                style={[styles.tab, blTab === "email" && styles.tabActive]}
+                onPress={() => setBlTab("email")}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="mail-outline" size={14} color={blTab === "email" ? "#fff" : "#8b9bb5"} />
+                <Text style={[styles.tabText, blTab === "email" && styles.tabTextActive]}>
+                  Request Info
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.tab, blTab === "bank_info" && styles.tabActive]}
+                onPress={() => setBlTab("bank_info")}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="card-outline" size={14} color={blTab === "bank_info" ? "#fff" : "#8b9bb5"} />
+                <Text style={[styles.tabText, blTab === "bank_info" && styles.tabTextActive]}>
+                  Bank Info
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.tab, blTab === "zelle_venmo" && styles.tabActive]}
+                onPress={() => setBlTab("zelle_venmo")}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="wallet-outline" size={14} color={blTab === "zelle_venmo" ? "#fff" : "#8b9bb5"} />
+                <Text style={[styles.tabText, blTab === "zelle_venmo" && styles.tabTextActive]}>
+                  Zelle/Venmo
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Shared fields */}
+            <FormInput
+              label="Customer Email"
+              value={blEmail}
+              onChangeText={setBlEmail}
+              placeholder="e.g., jane@email.com"
+              keyboardType="email-address"
+              autoCapitalize="none"
+            />
+
+            {blTab === "email" && (
+              <>
+                <Text style={styles.modalDescription}>
+                  Emails the customer asking them to reply with bank details or
+                  Zelle/Venmo info. Enter their info here when they reply.
+                </Text>
+
+                <FormInput
+                  label="Customer Name"
+                  value={blName}
+                  onChangeText={setBlName}
+                  placeholder="e.g., Jane Smith"
+                />
+
+                <FormInput
+                  label="Custom Message (optional)"
+                  value={blMessage}
+                  onChangeText={setBlMessage}
+                  placeholder="e.g., Thanks for consigning with us!"
+                  multiline
+                />
+
+                <View style={styles.modalActions}>
+                  <FormButton
+                    title="Cancel"
+                    variant="secondary"
+                    onPress={() => { setBankLinkModal(false); setBlTab("email"); }}
+                    disabled={blSending}
+                    style={{ flex: 1 }}
+                  />
+                  <FormButton
+                    title={blSending ? "Sending..." : "Send Email"}
+                    variant="primary"
+                    onPress={handleSendBankLink}
+                    loading={blSending}
+                    disabled={blSending || !blName.trim() || !blEmail.trim()}
+                    style={{ flex: 1 }}
+                  />
+                </View>
+              </>
+            )}
+
+            {blTab === "bank_info" && (
+              <>
+                <Text style={styles.modalDescription}>
+                  Enter bank routing and account number for Mercury ACH direct
+                  deposit. This is the fastest payout method.
+                </Text>
+
+                <FormInput
+                  label="Customer Name"
+                  value={blName}
+                  onChangeText={setBlName}
+                  placeholder="e.g., Jane Smith"
+                />
+
+                <FormSelect
+                  label="Account Type"
+                  value={blAccountType}
+                  onValueChange={(v: string) => setBlAccountType(v as "checking" | "savings")}
+                  options={[
+                    { label: "Checking", value: "checking" },
+                    { label: "Savings", value: "savings" },
+                  ]}
+                />
+
+                <FormInput
+                  label="Routing Number"
+                  value={blRouting}
+                  onChangeText={(text) => setBlRouting(text.replace(/\D/g, "").slice(0, 9))}
+                  placeholder="9-digit routing number"
+                  keyboardType="number-pad"
+                />
+
+                <FormInput
+                  label="Account Number"
+                  value={blAccount}
+                  onChangeText={(text) => setBlAccount(text.replace(/\D/g, "").slice(0, 17))}
+                  placeholder="Account number"
+                  keyboardType="number-pad"
+                />
+
+                <View style={styles.modalActions}>
+                  <FormButton
+                    title="Cancel"
+                    variant="secondary"
+                    onPress={() => { setBankLinkModal(false); setBlTab("email"); }}
+                    disabled={blBankSaving}
+                    style={{ flex: 1 }}
+                  />
+                  <FormButton
+                    title={blBankSaving ? "Saving..." : "Save Bank Info"}
+                    variant="primary"
+                    onPress={handleSaveBankInfo}
+                    loading={blBankSaving}
+                    disabled={blBankSaving || !blEmail.trim() || !blName.trim() || !blRouting.trim() || !blAccount.trim()}
+                    style={{ flex: 1 }}
+                  />
+                </View>
+              </>
+            )}
+
+            {blTab === "zelle_venmo" && (
+              <>
+                <Text style={styles.modalDescription}>
+                  Save the customer's Zelle or Venmo handle. When their items sell,
+                  you'll get a notification with the handle to send payment.
+                </Text>
+
+                <FormSelect
+                  label="Payment App"
+                  value={blFallbackMethod}
+                  onValueChange={(v: string) => setBlFallbackMethod(v as "zelle" | "venmo")}
+                  options={[
+                    { label: "Zelle", value: "zelle" },
+                    { label: "Venmo", value: "venmo" },
+                  ]}
+                />
+
+                <FormInput
+                  label={blFallbackMethod === "zelle" ? "Zelle Email or Phone" : "Venmo Handle"}
+                  value={blFallbackHandle}
+                  onChangeText={setBlFallbackHandle}
+                  placeholder={blFallbackMethod === "zelle" ? "e.g., jane@email.com or (555) 123-4567" : "e.g., @jane-smith"}
+                  autoCapitalize="none"
+                />
+
+                <View style={styles.modalActions}>
+                  <FormButton
+                    title="Cancel"
+                    variant="secondary"
+                    onPress={() => { setBankLinkModal(false); setBlTab("email"); }}
+                    disabled={blFallbackSaving}
+                    style={{ flex: 1 }}
+                  />
+                  <FormButton
+                    title={blFallbackSaving ? "Saving..." : "Save Info"}
+                    variant="primary"
+                    onPress={handleSaveFallback}
+                    loading={blFallbackSaving}
+                    disabled={blFallbackSaving || !blEmail.trim() || !blFallbackHandle.trim()}
+                    style={{ flex: 1 }}
+                  />
+                </View>
+              </>
+            )}
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </AdminPageWrapper>
   );
 }
@@ -612,6 +1131,68 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#8b9bb5",
     marginTop: 2,
+  },
+  // Mercury funding card
+  mercuryCard: {
+    backgroundColor: "#f59e0b10",
+    borderWidth: 1,
+    borderColor: "#f59e0b40",
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 16,
+  },
+  mercuryHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginBottom: 12,
+  },
+  mercuryIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#f59e0b20",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  mercuryTitle: { fontSize: 15, fontWeight: "700", color: "#f59e0b" },
+  mercuryWeek: { fontSize: 12, color: "#8b9bb5", marginTop: 2 },
+  mercuryAmount: {
+    fontSize: 32,
+    fontWeight: "800",
+    color: "#f1f5f9",
+    textAlign: "center",
+    marginBottom: 8,
+  },
+  mercuryDesc: { fontSize: 13, color: "#8b9bb5", textAlign: "center", marginBottom: 16, lineHeight: 19 },
+  mercuryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: "#f59e0b",
+    borderRadius: 12,
+    paddingVertical: 14,
+  },
+  mercuryBtnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
+  mercuryChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#3b82f610",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  mercuryChipText: { fontSize: 12, color: "#8b9bb5", fontWeight: "500" },
+  bankLinkBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#3b82f6",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
   },
   exportBtn: {
     flexDirection: "row",
@@ -881,5 +1462,36 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 12,
     marginTop: 8,
+  },
+
+  // Tabs
+  tabRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 16,
+  },
+  tab: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: "#0f1724",
+    borderWidth: 1,
+    borderColor: "#2a3545",
+  },
+  tabActive: {
+    backgroundColor: "#3b82f620",
+    borderColor: "#3b82f6",
+  },
+  tabText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#8b9bb5",
+  },
+  tabTextActive: {
+    color: "#fff",
   },
 });

@@ -223,6 +223,26 @@ export default function SettingsScreen() {
           </Text>
         </View>
 
+        {/* My Profile Link */}
+        <TouchableOpacity
+          style={styles.profileCard}
+          activeOpacity={0.7}
+          onPress={() => router.push("/(admin)/admin-profile" as any)}
+        >
+          <View style={styles.profileCardContent}>
+            <View style={styles.profileIcon}>
+              <Ionicons name="person-circle" size={28} color="#14b8a6" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.profileCardTitle}>My Profile</Text>
+              <Text style={styles.profileCardDesc}>
+                Update your info, enable push notifications, and set alert preferences.
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#14b8a6" />
+          </View>
+        </TouchableOpacity>
+
         {/* Share App QR Card */}
         <TouchableOpacity
           style={styles.qrCard}
@@ -411,6 +431,40 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#8b9bb5",
     marginTop: 4,
+  },
+
+  // Profile card
+  profileCard: {
+    backgroundColor: "#14b8a615",
+    borderWidth: 1,
+    borderColor: "#14b8a640",
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 16,
+  },
+  profileCardContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  profileIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#14b8a620",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  profileCardTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#14b8a6",
+    marginBottom: 2,
+  },
+  profileCardDesc: {
+    fontSize: 12,
+    color: "#8b9bb5",
+    lineHeight: 17,
   },
 
   // QR Card

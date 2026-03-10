@@ -256,6 +256,7 @@ export default function AdminLayout() {
           <Tabs.Screen name="social-media" options={{ href: null, headerTitle: "Social Media" }} />
           <Tabs.Screen name="share-app" options={{ href: null, headerTitle: "Share App" }} />
           <Tabs.Screen name="consultations" options={{ href: null, headerTitle: "Consultations" }} />
+          <Tabs.Screen name="admin-profile" options={{ href: null, headerTitle: "My Profile" }} />
         </Tabs>
       </View>
     </View>

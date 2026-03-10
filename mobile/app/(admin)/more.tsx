@@ -11,6 +11,12 @@ type MenuItem = {
 
 const MENU_ITEMS: MenuItem[] = [
   {
+    label: "My Profile",
+    subtitle: "Your info, push notifications, alert preferences",
+    icon: "person-circle-outline",
+    path: "/(admin)/admin-profile",
+  },
+  {
     label: "Dashboard",
     subtitle: "Approvals, job review, notifications",
     icon: "grid-outline",
