@@ -688,48 +688,85 @@ export default function PayoutsScreen() {
         </View>
       ) : null}
 
-      {/* Mercury Funding Card */}
-      {mercuryReplenishment && mercuryReplenishment.amount > 0 && mercuryReplenishment.status === "pending_approval" && (
-        <View style={styles.mercuryCard}>
-          <View style={styles.mercuryHeader}>
-            <View style={styles.mercuryIconWrap}>
-              <Ionicons name="wallet-outline" size={24} color="#f59e0b" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.mercuryTitle}>Mercury Replenishment Needed</Text>
-              <Text style={styles.mercuryWeek}>{mercuryReplenishment.weekLabel}</Text>
-            </View>
+      {/* Mercury Funding Card — always visible for admins */}
+      <View style={[
+        styles.mercuryCard,
+        mercuryReplenishment?.status === "approved" && { borderColor: "#10b98140", backgroundColor: "#10b98110" },
+        (!mercuryReplenishment || mercuryReplenishment.status === "idle") && { borderColor: "#3b82f640", backgroundColor: "#3b82f610" },
+      ]}>
+        <View style={styles.mercuryHeader}>
+          <View style={[
+            styles.mercuryIconWrap,
+            mercuryReplenishment?.status === "approved" && { backgroundColor: "#10b98120" },
+            (!mercuryReplenishment || mercuryReplenishment.status === "idle") && { backgroundColor: "#3b82f620" },
+          ]}>
+            <Ionicons
+              name={mercuryReplenishment?.status === "approved" ? "checkmark-circle" : mercuryReplenishment?.status === "pending_approval" ? "alert-circle" : "business-outline"}
+              size={24}
+              color={mercuryReplenishment?.status === "approved" ? "#10b981" : mercuryReplenishment?.status === "pending_approval" ? "#f59e0b" : "#3b82f6"}
+            />
           </View>
-          <Text style={styles.mercuryAmount}>${mercuryReplenishment.amount.toFixed(2)}</Text>
-          <Text style={styles.mercuryDesc}>
-            Transfer this amount from Chase to Mercury to cover last week's ACH payouts.
-          </Text>
-          <TouchableOpacity
-            style={[styles.mercuryBtn, fundingMercury && { opacity: 0.6 }]}
-            onPress={handleFundMercury}
-            disabled={fundingMercury}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="arrow-forward-circle" size={20} color="#fff" />
-            <Text style={styles.mercuryBtnText}>
-              {fundingMercury ? "Initiating Transfer..." : "Approve & Fund Mercury"}
+          <View style={{ flex: 1 }}>
+            <Text style={[
+              styles.mercuryTitle,
+              mercuryReplenishment?.status === "approved" && { color: "#10b981" },
+              (!mercuryReplenishment || mercuryReplenishment.status === "idle") && { color: "#3b82f6" },
+            ]}>
+              {mercuryReplenishment?.status === "approved"
+                ? "Mercury Funded"
+                : mercuryReplenishment?.status === "pending_approval"
+                ? "Mercury Replenishment Needed"
+                : "Mercury ACH Payouts"}
             </Text>
-          </TouchableOpacity>
-        </View>
-      )}
-      {mercuryReplenishment && mercuryReplenishment.status === "approved" && (
-        <View style={[styles.mercuryCard, { borderColor: "#10b98140", backgroundColor: "#10b98110" }]}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-            <Ionicons name="checkmark-circle" size={24} color="#10b981" />
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.mercuryTitle, { color: "#10b981" }]}>Mercury Funded</Text>
-              <Text style={styles.mercuryDesc}>
-                ${mercuryReplenishment.amount.toFixed(2)} transfer from Chase is processing (1-2 business days).
-              </Text>
-            </View>
+            <Text style={styles.mercuryWeek}>
+              {mercuryReplenishment?.status === "approved"
+                ? `$${mercuryReplenishment.amount.toFixed(2)} transfer processing (1-2 business days)`
+                : mercuryReplenishment?.status === "pending_approval"
+                ? mercuryReplenishment.weekLabel
+                : "Chase \u2192 Mercury \u2192 Scholar bank accounts"}
+            </Text>
           </View>
         </View>
-      )}
+
+        {/* Show amount + approve button when pending */}
+        {mercuryReplenishment?.status === "pending_approval" && mercuryReplenishment.amount > 0 && (
+          <>
+            <Text style={styles.mercuryAmount}>${mercuryReplenishment.amount.toFixed(2)}</Text>
+            <Text style={styles.mercuryDesc}>
+              Transfer this amount from Chase to Mercury to cover last week's ACH payouts.
+            </Text>
+            <TouchableOpacity
+              style={[styles.mercuryBtn, fundingMercury && { opacity: 0.6 }]}
+              onPress={handleFundMercury}
+              disabled={fundingMercury}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="arrow-forward-circle" size={20} color="#fff" />
+              <Text style={styles.mercuryBtnText}>
+                {fundingMercury ? "Initiating Transfer..." : "Approve & Fund Mercury"}
+              </Text>
+            </TouchableOpacity>
+          </>
+        )}
+
+        {/* Show idle state info */}
+        {(!mercuryReplenishment || mercuryReplenishment.status === "idle") && (
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
+            <View style={styles.mercuryChip}>
+              <Ionicons name="shield-checkmark-outline" size={14} color="#3b82f6" />
+              <Text style={styles.mercuryChipText}>ACH Direct Deposit</Text>
+            </View>
+            <View style={styles.mercuryChip}>
+              <Ionicons name="time-outline" size={14} color="#3b82f6" />
+              <Text style={styles.mercuryChipText}>50% at check-in, 50% after review</Text>
+            </View>
+            <View style={styles.mercuryChip}>
+              <Ionicons name="notifications-outline" size={14} color="#3b82f6" />
+              <Text style={styles.mercuryChipText}>Weekly replenishment alerts</Text>
+            </View>
+          </View>
+        )}
+      </View>
 
       {/* Summary cards */}
       {renderSummaryCards()}
@@ -1138,6 +1175,16 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
   },
   mercuryBtnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
+  mercuryChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#3b82f610",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  mercuryChipText: { fontSize: 12, color: "#8b9bb5", fontWeight: "500" },
   bankLinkBtn: {
     flexDirection: "row",
     alignItems: "center",
