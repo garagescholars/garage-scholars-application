@@ -169,8 +169,7 @@ const badgeStyles = StyleSheet.create({
 // ---------------------------------------------------------------------------
 
 const PAYMENT_METHODS = [
-  { label: "Venmo", value: "Venmo" },
-  { label: "Zelle", value: "Zelle" },
+  { label: "ACH (Mercury)", value: "ACH" },
   { label: "Cash", value: "Cash" },
   { label: "Check", value: "Check" },
 ];
@@ -183,7 +182,7 @@ export default function PayoutsScreen() {
 
   // Mark-as-paid modal state
   const [markPaidModal, setMarkPaidModal] = useState<Payout | null>(null);
-  const [paymentMethod, setPaymentMethod] = useState("Venmo");
+  const [paymentMethod, setPaymentMethod] = useState("ACH");
   const [transactionNote, setTransactionNote] = useState("");
 
   // Send Bank Link / Save Payment Info modal state
@@ -192,11 +191,8 @@ export default function PayoutsScreen() {
   const [blEmail, setBlEmail] = useState("");
   const [blMessage, setBlMessage] = useState("");
   const [blSending, setBlSending] = useState(false);
-  // Tabs: email request, save bank info, save zelle/venmo
-  const [blTab, setBlTab] = useState<"email" | "bank_info" | "zelle_venmo">("email");
-  const [blFallbackMethod, setBlFallbackMethod] = useState<"zelle" | "venmo">("zelle");
-  const [blFallbackHandle, setBlFallbackHandle] = useState("");
-  const [blFallbackSaving, setBlFallbackSaving] = useState(false);
+  // Tabs: email request, save bank info
+  const [blTab, setBlTab] = useState<"email" | "bank_info">("email");
   // Direct bank info entry
   const [blRouting, setBlRouting] = useState("");
   const [blAccount, setBlAccount] = useState("");
@@ -323,7 +319,7 @@ export default function PayoutsScreen() {
         notes: transactionNote,
       });
       setMarkPaidModal(null);
-      setPaymentMethod("Venmo");
+      setPaymentMethod("ACH");
       setTransactionNote("");
     } catch (err) {
       const message =
@@ -418,45 +414,6 @@ export default function PayoutsScreen() {
     }
   }, [blName, blEmail, blMessage]);
 
-  // ---------- Save Zelle/Venmo ----------
-  const handleSaveFallback = useCallback(async () => {
-    if (!functions || !blEmail.trim() || !blFallbackHandle.trim()) return;
-
-    setBlFallbackSaving(true);
-    try {
-      const callable = httpsCallable(functions, "gsSaveResalePaymentInfo");
-      await callable({
-        customerEmail: blEmail.trim(),
-        fallbackMethod: blFallbackMethod,
-        fallbackHandle: blFallbackHandle.trim(),
-      });
-
-      const label = blFallbackMethod === "zelle" ? "Zelle" : "Venmo";
-      const msg = `${label} info saved for ${blEmail}. Payouts will auto-route to ${blFallbackHandle.trim()}.`;
-
-      if (Platform.OS === "web") {
-        alert(msg);
-      } else {
-        Alert.alert("Saved", msg);
-      }
-
-      setBankLinkModal(false);
-      setBlEmail("");
-      setBlName("");
-      setBlFallbackHandle("");
-      setBlTab("bank");
-    } catch (err: any) {
-      const msg = err?.message || "Failed to save payment info.";
-      if (Platform.OS === "web") {
-        setError(msg);
-      } else {
-        Alert.alert("Error", msg);
-      }
-    } finally {
-      setBlFallbackSaving(false);
-    }
-  }, [blEmail, blFallbackMethod, blFallbackHandle]);
-
   // ---------- Save Bank Info (routing + account) ----------
   const handleSaveBankInfo = useCallback(async () => {
     if (!functions || !blEmail.trim() || !blName.trim() || !blRouting.trim() || !blAccount.trim()) return;
@@ -519,22 +476,22 @@ export default function PayoutsScreen() {
 
   // ---------- Render helpers ----------
   const renderSummaryCards = () => (
-    <View style={[styles.summaryRow, isDesktop && styles.summaryRowDesktop]}>
-      <View style={[styles.summaryCard, isDesktop && styles.summaryCardDesktop]}>
-        <Text style={styles.summaryLabel}>Pending</Text>
-        <Text style={[styles.summaryValue, { color: "#f59e0b" }]}>
+    <View style={[styles.summaryRow, isDesktop && styles.summaryRowDesktop, isMobile && { gap: 6, marginBottom: 10 }]}>
+      <View style={[styles.summaryCard, isDesktop && styles.summaryCardDesktop, isMobile && { padding: 10 }]}>
+        <Text style={[styles.summaryLabel, isMobile && { fontSize: 10 }]}>Pending</Text>
+        <Text style={[styles.summaryValue, isMobile && { fontSize: 18 }, { color: "#f59e0b" }]}>
           ${pendingTotal.toFixed(2)}
         </Text>
       </View>
-      <View style={[styles.summaryCard, isDesktop && styles.summaryCardDesktop]}>
-        <Text style={styles.summaryLabel}>Paid (YTD)</Text>
-        <Text style={[styles.summaryValue, { color: "#10b981" }]}>
+      <View style={[styles.summaryCard, isDesktop && styles.summaryCardDesktop, isMobile && { padding: 10 }]}>
+        <Text style={[styles.summaryLabel, isMobile && { fontSize: 10 }]}>Paid (YTD)</Text>
+        <Text style={[styles.summaryValue, isMobile && { fontSize: 18 }, { color: "#10b981" }]}>
           ${paidTotal.toFixed(2)}
         </Text>
       </View>
-      <View style={[styles.summaryCard, isDesktop && styles.summaryCardDesktop]}>
-        <Text style={styles.summaryLabel}>Total Payouts</Text>
-        <Text style={[styles.summaryValue, { color: "#f1f5f9" }]}>
+      <View style={[styles.summaryCard, isDesktop && styles.summaryCardDesktop, isMobile && { padding: 10 }]}>
+        <Text style={[styles.summaryLabel, isMobile && { fontSize: 10 }]}>Total</Text>
+        <Text style={[styles.summaryValue, isMobile && { fontSize: 18 }, { color: "#f1f5f9" }]}>
           {payouts.length}
         </Text>
       </View>
@@ -650,29 +607,29 @@ export default function PayoutsScreen() {
   return (
     <AdminPageWrapper scrollable={false}>
       {/* Header */}
-      <View style={styles.header}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.headerTitle}>Payout Management</Text>
+      <View style={[styles.header, isMobile && styles.headerMobile]}>
+        <Text style={[styles.headerTitle, isMobile && { fontSize: 18 }]}>Payouts</Text>
+        {!isMobile && (
           <Text style={styles.headerSubtitle}>
             Track and manage scholar payments
           </Text>
-        </View>
-        <View style={{ flexDirection: "row", gap: 8 }}>
+        )}
+        <View style={styles.headerActions}>
           <TouchableOpacity
-            style={styles.bankLinkBtn}
+            style={[styles.bankLinkBtn, isMobile && styles.actionBtnMobile]}
             onPress={() => setBankLinkModal(true)}
             activeOpacity={0.7}
           >
-            <Ionicons name="link-outline" size={16} color="#fff" />
-            <Text style={styles.exportBtnText}>Send Bank Link</Text>
+            <Ionicons name="link-outline" size={isMobile ? 14 : 16} color="#fff" />
+            <Text style={[styles.exportBtnText, isMobile && { fontSize: 11 }]}>Bank Link</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={styles.exportBtn}
+            style={[styles.exportBtn, isMobile && styles.actionBtnMobile]}
             onPress={handleExportCSV}
             activeOpacity={0.7}
           >
-            <Ionicons name="download-outline" size={16} color="#fff" />
-            <Text style={styles.exportBtnText}>Export for Taxes</Text>
+            <Ionicons name="download-outline" size={isMobile ? 14 : 16} color="#fff" />
+            <Text style={[styles.exportBtnText, isMobile && { fontSize: 11 }]}>Export</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -688,42 +645,45 @@ export default function PayoutsScreen() {
         </View>
       ) : null}
 
-      {/* Mercury Funding Card — always visible for admins */}
+      {/* Mercury Funding Card */}
       <View style={[
         styles.mercuryCard,
+        isMobile && styles.mercuryCardMobile,
         mercuryReplenishment?.status === "approved" && { borderColor: "#10b98140", backgroundColor: "#10b98110" },
         (!mercuryReplenishment || mercuryReplenishment.status === "idle") && { borderColor: "#3b82f640", backgroundColor: "#3b82f610" },
       ]}>
-        <View style={styles.mercuryHeader}>
+        <View style={[styles.mercuryHeader, isMobile && { gap: 10, marginBottom: 8 }]}>
           <View style={[
             styles.mercuryIconWrap,
+            isMobile && { width: 36, height: 36, borderRadius: 18 },
             mercuryReplenishment?.status === "approved" && { backgroundColor: "#10b98120" },
             (!mercuryReplenishment || mercuryReplenishment.status === "idle") && { backgroundColor: "#3b82f620" },
           ]}>
             <Ionicons
               name={mercuryReplenishment?.status === "approved" ? "checkmark-circle" : mercuryReplenishment?.status === "pending_approval" ? "alert-circle" : "business-outline"}
-              size={24}
+              size={isMobile ? 18 : 24}
               color={mercuryReplenishment?.status === "approved" ? "#10b981" : mercuryReplenishment?.status === "pending_approval" ? "#f59e0b" : "#3b82f6"}
             />
           </View>
           <View style={{ flex: 1 }}>
             <Text style={[
               styles.mercuryTitle,
+              isMobile && { fontSize: 13 },
               mercuryReplenishment?.status === "approved" && { color: "#10b981" },
               (!mercuryReplenishment || mercuryReplenishment.status === "idle") && { color: "#3b82f6" },
             ]}>
               {mercuryReplenishment?.status === "approved"
                 ? "Mercury Funded"
                 : mercuryReplenishment?.status === "pending_approval"
-                ? "Mercury Replenishment Needed"
+                ? "Replenishment Needed"
                 : "Mercury ACH Payouts"}
             </Text>
-            <Text style={styles.mercuryWeek}>
+            <Text style={[styles.mercuryWeek, isMobile && { fontSize: 11 }]}>
               {mercuryReplenishment?.status === "approved"
-                ? `$${mercuryReplenishment.amount.toFixed(2)} transfer processing (1-2 business days)`
+                ? `$${mercuryReplenishment.amount.toFixed(2)} processing`
                 : mercuryReplenishment?.status === "pending_approval"
                 ? mercuryReplenishment.weekLabel
-                : "Chase \u2192 Mercury \u2192 Scholar bank accounts"}
+                : "Chase > Mercury > Scholar accounts"}
             </Text>
           </View>
         </View>
@@ -731,39 +691,47 @@ export default function PayoutsScreen() {
         {/* Show amount + approve button when pending */}
         {mercuryReplenishment?.status === "pending_approval" && mercuryReplenishment.amount > 0 && (
           <>
-            <Text style={styles.mercuryAmount}>${mercuryReplenishment.amount.toFixed(2)}</Text>
-            <Text style={styles.mercuryDesc}>
-              Transfer this amount from Chase to Mercury to cover last week's ACH payouts.
+            <Text style={[styles.mercuryAmount, isMobile && { fontSize: 26, marginBottom: 4 }]}>
+              ${mercuryReplenishment.amount.toFixed(2)}
             </Text>
+            {!isMobile && (
+              <Text style={styles.mercuryDesc}>
+                Transfer this amount from Chase to Mercury to cover last week's ACH payouts.
+              </Text>
+            )}
             <TouchableOpacity
-              style={[styles.mercuryBtn, fundingMercury && { opacity: 0.6 }]}
+              style={[styles.mercuryBtn, isMobile && { paddingVertical: 10 }, fundingMercury && { opacity: 0.6 }]}
               onPress={handleFundMercury}
               disabled={fundingMercury}
               activeOpacity={0.7}
             >
-              <Ionicons name="arrow-forward-circle" size={20} color="#fff" />
-              <Text style={styles.mercuryBtnText}>
-                {fundingMercury ? "Initiating Transfer..." : "Approve & Fund Mercury"}
+              <Ionicons name="arrow-forward-circle" size={isMobile ? 16 : 20} color="#fff" />
+              <Text style={[styles.mercuryBtnText, isMobile && { fontSize: 13 }]}>
+                {fundingMercury ? "Initiating..." : "Approve & Fund"}
               </Text>
             </TouchableOpacity>
           </>
         )}
 
-        {/* Show idle state info */}
+        {/* Show idle state info — compact on mobile */}
         {(!mercuryReplenishment || mercuryReplenishment.status === "idle") && (
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
             <View style={styles.mercuryChip}>
-              <Ionicons name="shield-checkmark-outline" size={14} color="#3b82f6" />
+              <Ionicons name="shield-checkmark-outline" size={12} color="#3b82f6" />
               <Text style={styles.mercuryChipText}>ACH Direct Deposit</Text>
             </View>
-            <View style={styles.mercuryChip}>
-              <Ionicons name="time-outline" size={14} color="#3b82f6" />
-              <Text style={styles.mercuryChipText}>50% at check-in, 50% after review</Text>
-            </View>
-            <View style={styles.mercuryChip}>
-              <Ionicons name="notifications-outline" size={14} color="#3b82f6" />
-              <Text style={styles.mercuryChipText}>Weekly replenishment alerts</Text>
-            </View>
+            {!isMobile && (
+              <>
+                <View style={styles.mercuryChip}>
+                  <Ionicons name="time-outline" size={12} color="#3b82f6" />
+                  <Text style={styles.mercuryChipText}>50% at check-in, 50% after review</Text>
+                </View>
+                <View style={styles.mercuryChip}>
+                  <Ionicons name="notifications-outline" size={12} color="#3b82f6" />
+                  <Text style={styles.mercuryChipText}>Weekly replenishment alerts</Text>
+                </View>
+              </>
+            )}
           </View>
         )}
       </View>
@@ -802,7 +770,7 @@ export default function PayoutsScreen() {
         animationType="fade"
         onRequestClose={() => {
           setMarkPaidModal(null);
-          setPaymentMethod("Venmo");
+          setPaymentMethod("ACH");
           setTransactionNote("");
         }}
       >
@@ -812,7 +780,7 @@ export default function PayoutsScreen() {
           onPress={() => {
             if (busyId) return;
             setMarkPaidModal(null);
-            setPaymentMethod("Venmo");
+            setPaymentMethod("ACH");
             setTransactionNote("");
           }}
         >
@@ -847,7 +815,7 @@ export default function PayoutsScreen() {
               label="Transaction ID / Note"
               value={transactionNote}
               onChangeText={setTransactionNote}
-              placeholder="e.g., Venmo ID or confirmation #"
+              placeholder="e.g., ACH confirmation # or note"
             />
 
             <View style={styles.modalActions}>
@@ -856,7 +824,7 @@ export default function PayoutsScreen() {
                 variant="secondary"
                 onPress={() => {
                   setMarkPaidModal(null);
-                  setPaymentMethod("Venmo");
+                  setPaymentMethod("ACH");
                   setTransactionNote("");
                 }}
                 disabled={busyId === markPaidModal?.id}
@@ -887,10 +855,10 @@ export default function PayoutsScreen() {
         transparent
         animationType="fade"
         onRequestClose={() => {
-          if (!blSending && !blFallbackSaving && !blBankSaving) {
+          if (!blSending && !blBankSaving) {
             setBankLinkModal(false);
             setBlName(""); setBlEmail(""); setBlMessage("");
-            setBlFallbackHandle(""); setBlRouting(""); setBlAccount("");
+            setBlRouting(""); setBlAccount("");
             setBlTab("email");
           }
         }}
@@ -899,10 +867,10 @@ export default function PayoutsScreen() {
           style={styles.modalOverlay}
           activeOpacity={1}
           onPress={() => {
-            if (blSending || blFallbackSaving || blBankSaving) return;
+            if (blSending || blBankSaving) return;
             setBankLinkModal(false);
             setBlName(""); setBlEmail(""); setBlMessage("");
-            setBlFallbackHandle(""); setBlRouting(""); setBlAccount("");
+            setBlRouting(""); setBlAccount("");
             setBlTab("email");
           }}
         >
@@ -912,7 +880,7 @@ export default function PayoutsScreen() {
           >
             <Text style={styles.modalTitle}>Resale Customer Payment</Text>
 
-            {/* 3 Tab switcher */}
+            {/* Tab switcher */}
             <View style={styles.tabRow}>
               <TouchableOpacity
                 style={[styles.tab, blTab === "email" && styles.tabActive]}
@@ -934,16 +902,6 @@ export default function PayoutsScreen() {
                   Bank Info
                 </Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.tab, blTab === "zelle_venmo" && styles.tabActive]}
-                onPress={() => setBlTab("zelle_venmo")}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="wallet-outline" size={14} color={blTab === "zelle_venmo" ? "#fff" : "#8b9bb5"} />
-                <Text style={[styles.tabText, blTab === "zelle_venmo" && styles.tabTextActive]}>
-                  Zelle/Venmo
-                </Text>
-              </TouchableOpacity>
             </View>
 
             {/* Shared fields */}
@@ -959,8 +917,8 @@ export default function PayoutsScreen() {
             {blTab === "email" && (
               <>
                 <Text style={styles.modalDescription}>
-                  Emails the customer asking them to reply with bank details or
-                  Zelle/Venmo info. Enter their info here when they reply.
+                  Emails the customer asking them to reply with bank details for
+                  ACH direct deposit. Enter their info in the Bank Info tab when they reply.
                 </Text>
 
                 <FormInput
@@ -1058,50 +1016,6 @@ export default function PayoutsScreen() {
               </>
             )}
 
-            {blTab === "zelle_venmo" && (
-              <>
-                <Text style={styles.modalDescription}>
-                  Save the customer's Zelle or Venmo handle. When their items sell,
-                  you'll get a notification with the handle to send payment.
-                </Text>
-
-                <FormSelect
-                  label="Payment App"
-                  value={blFallbackMethod}
-                  onValueChange={(v: string) => setBlFallbackMethod(v as "zelle" | "venmo")}
-                  options={[
-                    { label: "Zelle", value: "zelle" },
-                    { label: "Venmo", value: "venmo" },
-                  ]}
-                />
-
-                <FormInput
-                  label={blFallbackMethod === "zelle" ? "Zelle Email or Phone" : "Venmo Handle"}
-                  value={blFallbackHandle}
-                  onChangeText={setBlFallbackHandle}
-                  placeholder={blFallbackMethod === "zelle" ? "e.g., jane@email.com or (555) 123-4567" : "e.g., @jane-smith"}
-                  autoCapitalize="none"
-                />
-
-                <View style={styles.modalActions}>
-                  <FormButton
-                    title="Cancel"
-                    variant="secondary"
-                    onPress={() => { setBankLinkModal(false); setBlTab("email"); }}
-                    disabled={blFallbackSaving}
-                    style={{ flex: 1 }}
-                  />
-                  <FormButton
-                    title={blFallbackSaving ? "Saving..." : "Save Info"}
-                    variant="primary"
-                    onPress={handleSaveFallback}
-                    loading={blFallbackSaving}
-                    disabled={blFallbackSaving || !blEmail.trim() || !blFallbackHandle.trim()}
-                    style={{ flex: 1 }}
-                  />
-                </View>
-              </>
-            )}
           </View>
         </TouchableOpacity>
       </Modal>
@@ -1117,10 +1031,14 @@ const styles = StyleSheet.create({
   // Header
   header: {
     flexDirection: "row",
+    flexWrap: "wrap",
     justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: 20,
-    gap: 12,
+    alignItems: "center",
+    marginBottom: 16,
+    gap: 8,
+  },
+  headerMobile: {
+    marginBottom: 10,
   },
   headerTitle: {
     fontSize: 22,
@@ -1131,6 +1049,15 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#8b9bb5",
     marginTop: 2,
+    width: "100%",
+  },
+  headerActions: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  actionBtnMobile: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
   },
   // Mercury funding card
   mercuryCard: {
@@ -1140,6 +1067,11 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     padding: 16,
     marginBottom: 16,
+  },
+  mercuryCardMobile: {
+    padding: 12,
+    marginBottom: 10,
+    borderRadius: 12,
   },
   mercuryHeader: {
     flexDirection: "row",

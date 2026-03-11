@@ -232,8 +232,8 @@ export default function PaymentSetupScreen() {
 
       {!bankLinked && (
         <Text style={styles.fallbackNote}>
-          Without a linked bank account, payouts will be processed manually via
-          Zelle or Venmo by an admin.
+          Without a linked bank account, payouts will be processed manually by
+          an admin via cash or check.
         </Text>
       )}
     </ScrollView>
