@@ -23,10 +23,7 @@ const STATUS_COLORS: Record<string, string> = {
   shared: "#8b5cf6",
 };
 
-const PACKAGES: Record<string, Record<string, string>> = {
-  garage_org: { tier1: "Undergraduate", tier2: "Graduate", tier3: "Doctorate" },
-  gym_install: { tier1: "Warm Up", tier2: "Super Set", tier3: "1 Rep Max" },
-};
+const SHADE_KEYS = ["shade1", "shade2", "shade3"] as const;
 
 export default function ConsultationsList() {
   const router = useRouter();
@@ -49,8 +46,9 @@ export default function ConsultationsList() {
   const renderItem = ({ item }: { item: GsConsultation & { id: string } }) => {
     const statusColor = STATUS_COLORS[item.status] || "#6b7280";
     const serviceLabel = item.serviceType === "garage_org" ? "Garage Org" : "Home Gym";
-    const readyCount = ["tier1", "tier2", "tier3"].filter(
-      (t) => item.mockups?.[t as keyof typeof item.mockups]?.status === "ready"
+    const mockups = item.mockups as any;
+    const readyCount = SHADE_KEYS.filter(
+      (s) => mockups?.[s]?.status === "ready"
     ).length;
 
     return (

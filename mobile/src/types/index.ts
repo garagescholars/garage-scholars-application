@@ -682,10 +682,18 @@ export type ConsultationServiceType = "garage_org" | "gym_install";
 export type ConsultationStatus = "draft" | "photos_captured" | "generating" | "ready" | "shared";
 export type MockupStatus = "idle" | "generating" | "ready" | "failed";
 
+export type MockupShade = {
+  status: MockupStatus;
+  imageUrl: string | null;
+  bmCode: string;   // e.g. "HC-169"
+  bmName: string;   // e.g. "Coventry Gray"
+  hex: string;      // e.g. "#A7A9A5"
+};
+
+// Legacy type for backward compatibility with old tier-based consultations
 export type MockupTier = {
   status: MockupStatus;
   imageUrl: string | null;
-  // Dual-mode parallel generation results
   kontextStatus?: MockupStatus;
   kontextUrl?: string | null;
   flux2Status?: MockupStatus;
@@ -706,8 +714,8 @@ export type WallOrgOption = "none" | "pegboard" | "slatwall";
 export type GarageFlooringType = "none" | "polyaspartic" | "click-in-plate";
 export type BikeRackOption = "none" | "wall-2" | "wall-4";
 
-// Generation mode for consultation mockups
-export type GenerationMode = "kontext-2pass" | "flux2-edit" | "both";
+// Shade key for consultation mockups
+export type ShadeKey = "shade1" | "shade2" | "shade3";
 
 // Gym addon option types
 export type GymFlooringType = "none" | "stall-mats" | "rubber-tiles";
@@ -756,9 +764,6 @@ export type GsConsultation = {
     bikeRack: BikeRackOption;
   };
 
-  // Generation mode preference
-  generationMode?: GenerationMode;
-
   gymAddons: {
     flooringType: GymFlooringType;
     flooringColor: BMColorRef;
@@ -769,9 +774,9 @@ export type GsConsultation = {
   };
 
   mockups: {
-    tier1: MockupTier;
-    tier2: MockupTier;
-    tier3: MockupTier;
+    shade1: MockupShade;
+    shade2: MockupShade;
+    shade3: MockupShade;
   };
 
   status: ConsultationStatus;

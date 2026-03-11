@@ -38,21 +38,23 @@ import type {
   GymAccessory,
   BMColorRef,
   BikeRackOption,
-  GenerationMode,
+  ShadeKey,
 } from "../../../../src/types";
 
-const PACKAGES = {
-  garage_org: {
-    tier1: { name: "The Undergraduate", price: "$1,197", desc: "Surface reset, sort & declutter, 1 zone/1 shelf, sweep & blow clean" },
-    tier2: { name: "The Graduate", price: "$2,197", desc: "Haul-away, micro-sorting, 8 bins, $300 storage credit, degrease & powerwash" },
-    tier3: { name: "The Doctorate", price: "$3,797", desc: "2 haul-aways, 16 premium bins, $500 storage credit, seasonal swap, white-glove" },
-  },
-  gym_install: {
-    tier1: { name: "Warm Up", price: "$997", desc: "Up to 2 equipment pieces, basic positioning, 2 scholars" },
-    tier2: { name: "Super Set", price: "$1,997", desc: "Up to 3 pieces, DPT-designed layout, 2 scholars" },
-    tier3: { name: "1 Rep Max", price: "$4,797", desc: "Up to 5 pieces, full flooring, DPT layout, wall storage, deadlift platform" },
-  },
-} as const;
+// ── Default BM grays for wall paint shades ──
+
+const DEFAULT_WALL_SHADES: Record<ShadeKey, { bmCode: string; bmName: string; hex: string }> = {
+  shade1: { bmCode: "HC-169", bmName: "Coventry Gray", hex: "#A7A9A5" },
+  shade2: { bmCode: "HC-170", bmName: "Stonington Gray", hex: "#9A9E9A" },
+  shade3: { bmCode: "HC-168", bmName: "Chelsea Gray", hex: "#8A8C8A" },
+};
+
+const SHADE_KEYS: ShadeKey[] = ["shade1", "shade2", "shade3"];
+const SHADE_LABELS: Record<ShadeKey, string> = {
+  shade1: "Light",
+  shade2: "Mid-Tone",
+  shade3: "Deep",
+};
 
 // Garage addon option configs
 const SHELVING_OPTIONS: { key: ShelvingOption; label: string }[] = [
@@ -92,19 +94,12 @@ const BIKE_RACK_OPTIONS: { key: BikeRackOption; label: string }[] = [
   { key: "wall-4", label: "4-Bike Wall Rack" },
 ];
 
-const GEN_MODE_OPTIONS: { key: GenerationMode; label: string; desc: string }[] = [
-  { key: "both", label: "Both (A/B Test)", desc: "Run Kontext 2-pass + FLUX.2 Pro side by side" },
-  { key: "kontext-2pass", label: "Kontext 2-Pass", desc: "Paint first, then add storage" },
-  { key: "flux2-edit", label: "FLUX.2 Pro Edit", desc: "Single powerful edit pass" },
-];
-
 const GYM_FLOORING_OPTIONS: { key: GymFlooringType; label: string }[] = [
   { key: "none", label: "None" },
   { key: "stall-mats", label: "Rubber Stall Mats" },
   { key: "rubber-tiles", label: "Rubber Tiles" },
 ];
 
-// Gym addon option configs
 const RACK_OPTIONS: { key: RackOption; label: string }[] = [
   { key: "none", label: "None" },
   { key: "wall-mount", label: "Wall Mount" },
@@ -139,6 +134,13 @@ export default function ConfigureConsultation() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
 
+  // Wall paint shades (3 BM colors for wall paint)
+  const [wallShades, setWallShades] = useState<Record<ShadeKey, { bmCode: string; bmName: string; hex: string }>>(
+    { ...DEFAULT_WALL_SHADES }
+  );
+  const [editingShade, setEditingShade] = useState<ShadeKey | null>(null);
+  const [shadeColorFamily, setShadeColorFamily] = useState<BMFamily>("gray");
+
   // Garage addons state
   const [garageShelving, setGarageShelving] = useState<ShelvingOption>("none");
   const [garageOverhead, setGarageOverhead] = useState<OverheadOption>("none");
@@ -148,9 +150,6 @@ export default function ConfigureConsultation() {
   const [garageFloorColor, setGarageFloorColor] = useState<BMColorRef>(null);
   const [garageColorFamily, setGarageColorFamily] = useState<BMFamily>("gray");
   const [garageBikeRack, setGarageBikeRack] = useState<BikeRackOption>("none");
-
-  // Generation mode
-  const [genMode, setGenMode] = useState<GenerationMode>("both");
 
   // Gym addons state
   const [gymFlooringType, setGymFlooringType] = useState<GymFlooringType>("none");
@@ -168,11 +167,20 @@ export default function ConfigureConsultation() {
         const data = { id: snap.id, ...snap.data() } as GsConsultation;
         setConsultation(data);
 
-        // Initialize from doc — handle both old (boolean) and new (string) shapes
+        // Initialize wall shades from doc if they exist
+        const mockups = data.mockups as any;
+        if (mockups?.shade1?.bmCode) {
+          setWallShades({
+            shade1: { bmCode: mockups.shade1.bmCode, bmName: mockups.shade1.bmName, hex: mockups.shade1.hex },
+            shade2: { bmCode: mockups.shade2.bmCode, bmName: mockups.shade2.bmName, hex: mockups.shade2.hex },
+            shade3: { bmCode: mockups.shade3.bmCode, bmName: mockups.shade3.bmName, hex: mockups.shade3.hex },
+          });
+        }
+
+        // Initialize garage addons from doc
         const ga = data.garageAddons as any;
         if (ga) {
           if (typeof ga.overheadStorage === "boolean" || typeof ga.polyasparticFlooring === "boolean") {
-            // Old shape — map booleans to new values
             setGarageOverhead(ga.overheadStorage ? "2-racks" : "none");
             setGarageShelving(ga.extraShelving ? "1-unit" : "none");
             setGarageFlooringType(ga.polyasparticFlooring ? "polyaspartic" : "none");
@@ -183,7 +191,6 @@ export default function ConfigureConsultation() {
             );
             setGarageBikeRack(ga.bikeRack || "none");
           } else {
-            // New shape
             setGarageShelving(ga.shelving || "none");
             setGarageOverhead(ga.overheadStorage || "none");
             setGarageCabinets(ga.cabinets || "none");
@@ -194,10 +201,10 @@ export default function ConfigureConsultation() {
           }
         }
 
+        // Initialize gym addons from doc
         const gy = data.gymAddons as any;
         if (gy) {
           if (typeof gy.rubberFlooring === "boolean" || typeof gy.cableSystem === "boolean") {
-            // Old shape
             setGymFlooringType(gy.rubberFlooring ? "rubber-tiles" : "none");
             setGymFloorColor(
               gy.flooringColor && typeof gy.flooringColor === "string"
@@ -212,7 +219,6 @@ export default function ConfigureConsultation() {
             if (gy.pullUpRig) acc.push("pull-up-rig");
             setGymAccessories(acc);
           } else {
-            // New shape
             setGymFlooringType(gy.flooringType || (gy.flooring ? "rubber-tiles" : "none"));
             setGymFloorColor(gy.flooringColor || null);
             setGymRack(gy.rackSystem || "none");
@@ -231,6 +237,14 @@ export default function ConfigureConsultation() {
     setGymAccessories((prev) =>
       prev.includes(acc) ? prev.filter((a) => a !== acc) : [...prev, acc]
     );
+  };
+
+  const selectShadeColor = (shadeKey: ShadeKey, color: BMColor) => {
+    setWallShades((prev) => ({
+      ...prev,
+      [shadeKey]: { bmCode: color.code, bmName: color.name, hex: color.hex },
+    }));
+    setEditingShade(null);
   };
 
   const handleGenerate = async () => {
@@ -257,25 +271,22 @@ export default function ConfigureConsultation() {
           cableMachine: gymCable,
           accessories: gymAccessories,
         },
-        generationMode: genMode,
+        // Store shade colors on the mockup objects
+        mockups: {
+          shade1: { status: "idle", imageUrl: null, ...wallShades.shade1 },
+          shade2: { status: "idle", imageUrl: null, ...wallShades.shade2 },
+          shade3: { status: "idle", imageUrl: null, ...wallShades.shade3 },
+        },
         status: "generating",
         updatedAt: serverTimestamp(),
       });
 
       const generateMockup = httpsCallable(functions, "gsGenerateConsultMockup");
-      const tiers = ["tier1", "tier2", "tier3"] as const;
 
-      // Determine which modes to fire
-      const modes: string[] = genMode === "both"
-        ? ["kontext-2pass", "flux2-edit"]
-        : [genMode];
-
-      // Fire all tier × mode combinations in parallel
-      tiers.forEach((tier) => {
-        modes.forEach((m) => {
-          generateMockup({ consultationId: id, tier, mode: m }).catch((err) => {
-            console.error(`Failed to generate ${tier}/${m}:`, err);
-          });
+      // Fire all 3 shade generations in parallel
+      SHADE_KEYS.forEach((shade) => {
+        generateMockup({ consultationId: id, shade }).catch((err) => {
+          console.error(`Failed to generate ${shade}:`, err);
         });
       });
 
@@ -296,7 +307,6 @@ export default function ConfigureConsultation() {
   }
 
   const serviceType = consultation.serviceType;
-  const pkgs = PACKAGES[serviceType];
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.scroll}>
@@ -333,23 +343,87 @@ export default function ConfigureConsultation() {
         </View>
       )}
 
-      {/* Package tiers */}
-      <Text style={styles.sectionLabel}>PACKAGES</Text>
-      {(["tier1", "tier2", "tier3"] as const).map((tier) => {
-        const pkg = pkgs[tier];
+      {/* Wall Paint Shades */}
+      <Text style={styles.sectionLabel}>WALL PAINT SHADES</Text>
+      <Text style={styles.sectionHint}>
+        Pick 3 Benjamin Moore colors. Same items in all mockups — only the wall color changes.
+      </Text>
+
+      {SHADE_KEYS.map((shadeKey) => {
+        const shade = wallShades[shadeKey];
+        const isEditing = editingShade === shadeKey;
+
         return (
-          <View key={tier} style={styles.packageCard}>
-            <View style={styles.packageHeader}>
-              <Text style={styles.packageName}>{pkg.name}</Text>
-              <Text style={styles.packagePrice}>{pkg.price}</Text>
-            </View>
-            <Text style={styles.packageDesc}>{pkg.desc}</Text>
+          <View key={shadeKey} style={styles.shadeCard}>
+            <TouchableOpacity
+              style={styles.shadeHeader}
+              onPress={() => setEditingShade(isEditing ? null : shadeKey)}
+            >
+              <View style={[styles.shadeSwatch, { backgroundColor: shade.hex }]} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.shadeLabel}>{SHADE_LABELS[shadeKey]}</Text>
+                <Text style={styles.shadeName}>{shade.bmName}</Text>
+                <Text style={styles.shadeCode}>{shade.bmCode}</Text>
+              </View>
+              <Ionicons
+                name={isEditing ? "chevron-up" : "chevron-down"}
+                size={20}
+                color={colors.text.muted}
+              />
+            </TouchableOpacity>
+
+            {isEditing && (
+              <View style={styles.shadePickerExpanded}>
+                {/* Family selector */}
+                <View style={styles.chipRow}>
+                  {BM_FAMILIES.map((fam) => (
+                    <TouchableOpacity
+                      key={fam}
+                      style={[styles.familyChip, shadeColorFamily === fam && styles.familyChipActive]}
+                      onPress={() => setShadeColorFamily(fam)}
+                    >
+                      <Text style={[styles.familyChipText, shadeColorFamily === fam && styles.familyChipTextActive]}>
+                        {BM_FAMILY_LABELS[fam]}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                {/* Color swatches */}
+                <View style={styles.swatchRow}>
+                  {getColorsByFamily(shadeColorFamily).map((c) => {
+                    const isSelected = shade.bmCode === c.code;
+                    return (
+                      <TouchableOpacity
+                        key={c.code}
+                        style={styles.swatchItem}
+                        onPress={() => selectShadeColor(shadeKey, c)}
+                      >
+                        <View
+                          style={[
+                            styles.swatchCircle,
+                            { backgroundColor: c.hex },
+                            isSelected && styles.swatchCircleSelected,
+                          ]}
+                        >
+                          {isSelected && <Ionicons name="checkmark" size={16} color="#fff" />}
+                        </View>
+                        <Text style={[styles.swatchName, isSelected && styles.swatchNameActive]} numberOfLines={2}>
+                          {c.name}
+                        </Text>
+                        <Text style={styles.swatchCode}>{c.code}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            )}
           </View>
         );
       })}
 
-      {/* Addons */}
-      <Text style={styles.sectionLabel}>CUSTOMIZE ADD-ONS</Text>
+      {/* Items / Addons */}
+      <Text style={styles.sectionLabel}>ITEMS TO INCLUDE</Text>
 
       {serviceType === "garage_org" ? (
         <View style={styles.addonSection}>
@@ -404,28 +478,6 @@ export default function ConfigureConsultation() {
         </View>
       )}
 
-      {/* Generation Mode Selector */}
-      <Text style={styles.sectionLabel}>AI ENGINE</Text>
-      <View style={styles.addonSection}>
-        {GEN_MODE_OPTIONS.map((opt) => (
-          <TouchableOpacity
-            key={opt.key}
-            style={[styles.modeCard, genMode === opt.key && styles.modeCardActive]}
-            onPress={() => setGenMode(opt.key)}
-          >
-            <View style={styles.modeHeader}>
-              {genMode === opt.key && (
-                <Ionicons name="checkmark-circle" size={18} color={colors.brand.teal} />
-              )}
-              <Text style={[styles.modeLabel, genMode === opt.key && styles.modeLabelActive]}>
-                {opt.label}
-              </Text>
-            </View>
-            <Text style={styles.modeDesc}>{opt.desc}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
       {/* Generate Button */}
       <TouchableOpacity
         style={[styles.generateBtn, generating && styles.generateBtnDisabled]}
@@ -438,14 +490,12 @@ export default function ConfigureConsultation() {
           <Ionicons name="sparkles" size={22} color="#fff" />
         )}
         <Text style={styles.generateBtnText}>
-          {generating ? "Starting..." : "Generate Mockups"}
+          {generating ? "Starting..." : "Generate 3 Shade Mockups"}
         </Text>
       </TouchableOpacity>
 
       <Text style={styles.hint}>
-        {genMode === "both"
-          ? "AI will generate 6 mockups — 3 tiers × 2 engines. Takes ~30-60 seconds."
-          : "AI will generate 3 mockups — one per package tier. Takes ~15-30 seconds each."}
+        AI will generate 3 mockups — same items, different wall colors. Takes ~15-30 seconds each.
       </Text>
     </ScrollView>
   );
@@ -499,7 +549,6 @@ function BMColorPicker({
 
   return (
     <View style={styles.bmContainer}>
-      {/* Family selector */}
       <View style={styles.chipRow}>
         {BM_FAMILIES.map((fam) => (
           <TouchableOpacity
@@ -514,7 +563,6 @@ function BMColorPicker({
         ))}
       </View>
 
-      {/* Color swatches */}
       <View style={styles.swatchRow}>
         {familyColors.map((c) => {
           const isSelected = selectedColor?.code === c.code;
@@ -587,20 +635,58 @@ const styles = StyleSheet.create({
     color: colors.text.muted,
     letterSpacing: 1,
     marginTop: 24,
-    marginBottom: 10,
+    marginBottom: 6,
   },
-  packageCard: {
+  sectionHint: {
+    fontSize: 13,
+    color: colors.text.secondary,
+    marginBottom: 12,
+  },
+  // Shade cards
+  shadeCard: {
     backgroundColor: colors.bg.card,
     borderRadius: 12,
-    padding: 14,
     marginBottom: 8,
-    borderLeftWidth: 3,
-    borderLeftColor: colors.brand.teal,
+    overflow: "hidden",
   },
-  packageHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  packageName: { fontSize: 15, fontWeight: "700", color: colors.text.primary },
-  packagePrice: { fontSize: 15, fontWeight: "700", color: colors.brand.teal },
-  packageDesc: { fontSize: 13, color: colors.text.secondary, marginTop: 4 },
+  shadeHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 14,
+    gap: 12,
+  },
+  shadeSwatch: {
+    width: 48,
+    height: 48,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: "rgba(255,255,255,0.1)",
+  },
+  shadeLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.text.muted,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  shadeName: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.text.primary,
+    marginTop: 1,
+  },
+  shadeCode: {
+    fontSize: 12,
+    color: colors.text.secondary,
+  },
+  shadePickerExpanded: {
+    paddingHorizontal: 14,
+    paddingBottom: 14,
+    gap: 12,
+    borderTopWidth: 1,
+    borderTopColor: colors.border.divider,
+  },
+  // Addon section
   addonSection: { gap: 12 },
   addonLabel: {
     fontSize: 14,
@@ -608,7 +694,6 @@ const styles = StyleSheet.create({
     color: colors.text.primary,
     marginBottom: 6,
   },
-  // Option picker
   optionPickerContainer: {
     gap: 4,
   },
@@ -637,7 +722,6 @@ const styles = StyleSheet.create({
   optionChipTextActive: {
     color: colors.brand.teal,
   },
-  // Accessory chips (multi-select)
   accessoryChip: {
     backgroundColor: colors.bg.card,
     borderRadius: 20,
@@ -661,7 +745,7 @@ const styles = StyleSheet.create({
   accessoryTextActive: {
     color: colors.brand.teal,
   },
-  // BM Color picker
+  // BM Color picker (for floor colors)
   bmContainer: {
     backgroundColor: colors.bg.card,
     borderRadius: 12,
@@ -692,6 +776,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 12,
+    paddingTop: 4,
   },
   swatchItem: {
     alignItems: "center",
@@ -724,37 +809,6 @@ const styles = StyleSheet.create({
     fontSize: 9,
     color: colors.text.muted,
     textAlign: "center",
-  },
-  // Mode selector
-  modeCard: {
-    backgroundColor: colors.bg.card,
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 1.5,
-    borderColor: "transparent",
-  },
-  modeCardActive: {
-    borderColor: colors.brand.teal,
-    backgroundColor: `${colors.brand.teal}10`,
-  },
-  modeHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  modeLabel: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: colors.text.muted,
-  },
-  modeLabelActive: {
-    color: colors.brand.teal,
-  },
-  modeDesc: {
-    fontSize: 12,
-    color: colors.text.secondary,
-    marginTop: 4,
-    marginLeft: 24,
   },
   generateBtn: {
     flexDirection: "row",

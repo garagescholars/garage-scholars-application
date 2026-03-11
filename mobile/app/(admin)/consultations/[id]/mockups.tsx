@@ -19,33 +19,17 @@ import { db } from "../../../../src/lib/firebase";
 import { COLLECTIONS } from "../../../../src/constants/collections";
 import { colors } from "../../../../src/constants/theme";
 import BeforeAfterSlider from "../../../../src/components/BeforeAfterSlider";
-import type { GsConsultation, ConsultationServiceType } from "../../../../src/types";
+import type { GsConsultation, ShadeKey } from "../../../../src/types";
 
-const PACKAGES: Record<ConsultationServiceType, Record<string, { name: string; price: string; features: string }>> = {
-  garage_org: {
-    tier1: { name: "The Undergraduate", price: "$1,197", features: "Overhead racks + basic declutter" },
-    tier2: { name: "The Graduate", price: "$2,197", features: "Bins + shelving + overhead racks" },
-    tier3: { name: "The Doctorate", price: "$3,697", features: "Cabinets + pegboard + full premium" },
-  },
-  gym_install: {
-    tier1: { name: "Warm Up", price: "$997", features: "Dumbbells + pull-up bar + rubber floor" },
-    tier2: { name: "Super Set", price: "$1,997", features: "Power cage + bench + cable machine" },
-    tier3: { name: "1 Rep Max", price: "$4,797", features: "Full elite gym — rack, cables, mirrors" },
-  },
-};
-
-const TIERS = ["tier1", "tier2", "tier3"] as const;
+const SHADE_KEYS: ShadeKey[] = ["shade1", "shade2", "shade3"];
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
-
-type ViewMode = "kontext" | "flux2" | "classic";
 
 export default function MockupsPresentation() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [consultation, setConsultation] = useState<GsConsultation | null>(null);
-  const [fullscreenTier, setFullscreenTier] = useState<string | null>(null);
-  const [fullscreenMode, setFullscreenMode] = useState<ViewMode>("kontext");
+  const [activeShade, setActiveShade] = useState<ShadeKey>("shade1");
+  const [fullscreenShade, setFullscreenShade] = useState<ShadeKey | null>(null);
   const [sharing, setSharing] = useState(false);
-  const [activeMode, setActiveMode] = useState<ViewMode>("kontext");
 
   useEffect(() => {
     if (!id) return;
@@ -57,7 +41,7 @@ export default function MockupsPresentation() {
     return unsub;
   }, [id]);
 
-  const handleShare = async (imageUrl: string, _tierName: string) => {
+  const handleShare = async (imageUrl: string) => {
     setSharing(true);
     try {
       const file = new ExpoFile(Paths.cache, `mockup_${Date.now()}.png`);
@@ -87,41 +71,23 @@ export default function MockupsPresentation() {
   }
 
   const serviceType = consultation.serviceType;
-  const pkgs = PACKAGES[serviceType];
   const beforeUri = consultation.spacePhotoUrls?.wide;
+  const mockups = consultation.mockups as any;
 
-  // Determine if dual-mode results exist
-  const hasDualMode = TIERS.some((t) => {
-    const m = consultation.mockups?.[t] as any;
-    return m?.kontextStatus || m?.flux2Status;
-  });
-
-  // Helper to get the image URL and status for a tier based on active mode
-  const getMockupData = (tier: string, mode: ViewMode) => {
-    const m = consultation.mockups?.[tier as keyof typeof consultation.mockups] as any;
-    if (!m) return { status: "idle" as const, imageUrl: null };
-
-    if (mode === "kontext") {
-      return {
-        status: (m.kontextStatus || m.status || "idle") as string,
-        imageUrl: m.kontextUrl || m.imageUrl || null,
-      };
-    } else if (mode === "flux2") {
-      return {
-        status: (m.flux2Status || "idle") as string,
-        imageUrl: m.flux2Url || null,
-      };
-    }
-    // classic
+  // Get shade data
+  const getShadeData = (shade: ShadeKey) => {
+    const m = mockups?.[shade];
+    if (!m) return { status: "idle", imageUrl: null, bmName: "", bmCode: "", hex: "#888" };
     return {
       status: (m.status || "idle") as string,
       imageUrl: m.imageUrl || null,
+      bmName: m.bmName || "",
+      bmCode: m.bmCode || "",
+      hex: m.hex || "#888",
     };
   };
 
-  // Count ready mockups per mode
-  const countReady = (mode: ViewMode) =>
-    TIERS.filter((t) => getMockupData(t, mode).status === "ready").length;
+  const activeData = getShadeData(activeShade);
 
   return (
     <View style={styles.container}>
@@ -132,118 +98,123 @@ export default function MockupsPresentation() {
           {serviceType === "garage_org" ? "Garage Organization" : "Home Gym Installation"} — {consultation.address}
         </Text>
 
-        {/* Mode Toggle (only shown for dual-mode) */}
-        {hasDualMode && (
-          <View style={styles.modeToggleRow}>
-            <TouchableOpacity
-              style={[styles.modeTab, activeMode === "kontext" && styles.modeTabActive]}
-              onPress={() => setActiveMode("kontext")}
-            >
-              <Text style={[styles.modeTabText, activeMode === "kontext" && styles.modeTabTextActive]}>
-                Kontext 2-Pass
-              </Text>
-              <Text style={styles.modeReadyCount}>{countReady("kontext")}/3</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.modeTab, activeMode === "flux2" && styles.modeTabActive]}
-              onPress={() => setActiveMode("flux2")}
-            >
-              <Text style={[styles.modeTabText, activeMode === "flux2" && styles.modeTabTextActive]}>
-                FLUX.2 Pro Edit
-              </Text>
-              <Text style={styles.modeReadyCount}>{countReady("flux2")}/3</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Tier Cards */}
-        {TIERS.map((tier) => {
-          const pkg = pkgs[tier];
-          const displayMode = hasDualMode ? activeMode : "classic";
-          const { status, imageUrl } = getMockupData(tier, displayMode);
-
-          return (
-            <View key={tier} style={styles.tierCard}>
-              <View style={styles.tierHeader}>
-                <View>
-                  <Text style={styles.tierName}>{pkg.name}</Text>
-                  <Text style={styles.tierFeatures}>{pkg.features}</Text>
+        {/* Shade Tabs */}
+        <View style={styles.shadeTabRow}>
+          {SHADE_KEYS.map((shade) => {
+            const data = getShadeData(shade);
+            const isActive = activeShade === shade;
+            return (
+              <TouchableOpacity
+                key={shade}
+                style={[styles.shadeTab, isActive && styles.shadeTabActive]}
+                onPress={() => setActiveShade(shade)}
+              >
+                <View style={[styles.shadeTabSwatch, { backgroundColor: data.hex }]}>
+                  {data.status === "ready" && (
+                    <Ionicons name="checkmark" size={12} color="#fff" />
+                  )}
                 </View>
-                <Text style={styles.tierPrice}>{pkg.price}</Text>
-              </View>
-
-              {/* Mockup area */}
-              {status === "generating" || status === "idle" ? (
-                <View style={styles.shimmerContainer}>
-                  <ShimmerSkeleton />
-                  <Text style={styles.generatingText}>
-                    {status === "idle" ? "Waiting..." : "Generating mockup..."}
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.shadeTabName, isActive && styles.shadeTabNameActive]} numberOfLines={1}>
+                    {data.bmName || "—"}
                   </Text>
+                  <Text style={styles.shadeTabCode}>{data.bmCode}</Text>
                 </View>
-              ) : status === "failed" ? (
-                <View style={styles.failedContainer}>
-                  <Ionicons name="warning-outline" size={24} color={colors.status.error} />
-                  <Text style={styles.failedText}>Generation failed</Text>
-                </View>
-              ) : imageUrl && beforeUri ? (
-                <TouchableOpacity
-                  activeOpacity={0.9}
-                  onPress={() => {
-                    setFullscreenTier(tier);
-                    setFullscreenMode(displayMode);
-                  }}
-                >
-                  <BeforeAfterSlider
-                    beforeUri={beforeUri}
-                    afterUri={imageUrl}
-                    height={220}
-                  />
-                </TouchableOpacity>
-              ) : null}
+                {data.status === "generating" && (
+                  <ActivityIndicator size="small" color={colors.brand.teal} />
+                )}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
 
-              {/* Mode comparison badges */}
-              {hasDualMode && status === "ready" && (
-                <View style={styles.modeBadgeRow}>
-                  <View style={[styles.modeBadge, activeMode === "kontext" && styles.modeBadgeActive]}>
-                    <View style={[styles.modeDot, { backgroundColor: "#6366f1" }]} />
-                    <Text style={styles.modeBadgeText}>Kontext</Text>
-                  </View>
-                  <View style={[styles.modeBadge, activeMode === "flux2" && styles.modeBadgeActive]}>
-                    <View style={[styles.modeDot, { backgroundColor: "#f59e0b" }]} />
-                    <Text style={styles.modeBadgeText}>FLUX.2</Text>
-                  </View>
-                </View>
-              )}
-
-              {/* Share single tier */}
-              {status === "ready" && imageUrl && (
-                <TouchableOpacity
-                  style={styles.shareOneBtn}
-                  onPress={() => handleShare(imageUrl, pkg.name)}
-                  disabled={sharing}
-                >
-                  <Ionicons name="share-outline" size={16} color={colors.brand.teal} />
-                  <Text style={styles.shareOneText}>Share</Text>
-                </TouchableOpacity>
-              )}
+        {/* Active Shade Mockup */}
+        <View style={styles.mockupCard}>
+          <View style={styles.mockupCardHeader}>
+            <View style={[styles.headerSwatch, { backgroundColor: activeData.hex }]} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.mockupColorName}>{activeData.bmName}</Text>
+              <Text style={styles.mockupColorCode}>{activeData.bmCode}</Text>
             </View>
+          </View>
+
+          {activeData.status === "generating" || activeData.status === "idle" ? (
+            <View style={styles.shimmerContainer}>
+              <ShimmerSkeleton />
+              <Text style={styles.generatingText}>
+                {activeData.status === "idle" ? "Waiting..." : "Generating mockup..."}
+              </Text>
+            </View>
+          ) : activeData.status === "failed" ? (
+            <View style={styles.failedContainer}>
+              <Ionicons name="warning-outline" size={24} color={colors.status.error} />
+              <Text style={styles.failedText}>Generation failed</Text>
+            </View>
+          ) : activeData.imageUrl && beforeUri ? (
+            <TouchableOpacity
+              activeOpacity={0.9}
+              onPress={() => setFullscreenShade(activeShade)}
+            >
+              <BeforeAfterSlider
+                beforeUri={beforeUri}
+                afterUri={activeData.imageUrl}
+                height={260}
+              />
+            </TouchableOpacity>
+          ) : null}
+
+          {/* Share button */}
+          {activeData.status === "ready" && activeData.imageUrl && (
+            <TouchableOpacity
+              style={styles.shareOneBtn}
+              onPress={() => handleShare(activeData.imageUrl!)}
+              disabled={sharing}
+            >
+              <Ionicons name="share-outline" size={16} color={colors.brand.teal} />
+              <Text style={styles.shareOneText}>Share This Shade</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* All Shades Summary */}
+        <Text style={styles.summaryLabel}>ALL SHADES</Text>
+        {SHADE_KEYS.map((shade) => {
+          const data = getShadeData(shade);
+          return (
+            <TouchableOpacity
+              key={shade}
+              style={[styles.summaryRow, activeShade === shade && styles.summaryRowActive]}
+              onPress={() => setActiveShade(shade)}
+            >
+              <View style={[styles.summaryDot, { backgroundColor: data.hex }]} />
+              <Text style={styles.summaryName}>{data.bmName || "—"}</Text>
+              <View style={styles.summaryStatus}>
+                {data.status === "ready" ? (
+                  <Ionicons name="checkmark-circle" size={18} color="#10b981" />
+                ) : data.status === "generating" ? (
+                  <ActivityIndicator size="small" color={colors.brand.teal} />
+                ) : data.status === "failed" ? (
+                  <Ionicons name="close-circle" size={18} color={colors.status.error} />
+                ) : (
+                  <Ionicons name="ellipse-outline" size={18} color={colors.text.muted} />
+                )}
+              </View>
+            </TouchableOpacity>
           );
         })}
       </ScrollView>
 
       {/* Bottom bar */}
       <View style={styles.bottomBar}>
-        <Text style={styles.bottomText}>Which setup fits your vision?</Text>
+        <Text style={styles.bottomText}>Which shade fits your vision?</Text>
         <TouchableOpacity
           style={styles.shareAllBtn}
           onPress={() => {
-            const displayMode = hasDualMode ? activeMode : "classic";
-            const readyTier = TIERS.find(
-              (t) => getMockupData(t, displayMode).status === "ready" && getMockupData(t, displayMode).imageUrl
+            const readyShade = SHADE_KEYS.find(
+              (s) => getShadeData(s).status === "ready" && getShadeData(s).imageUrl
             );
-            if (readyTier) {
-              const { imageUrl } = getMockupData(readyTier, displayMode);
-              handleShare(imageUrl!, pkgs[readyTier].name);
+            if (readyShade) {
+              handleShare(getShadeData(readyShade).imageUrl!);
             } else {
               Alert.alert("No mockups ready", "Wait for at least one mockup to finish generating.");
             }
@@ -256,29 +227,26 @@ export default function MockupsPresentation() {
       </View>
 
       {/* Fullscreen modal */}
-      {fullscreenTier && beforeUri && (() => {
-        const { imageUrl } = getMockupData(fullscreenTier, fullscreenMode);
-        if (!imageUrl) return null;
+      {fullscreenShade && beforeUri && (() => {
+        const data = getShadeData(fullscreenShade);
+        if (!data.imageUrl) return null;
         return (
           <Modal visible transparent animationType="fade">
             <View style={styles.fullscreenModal}>
               <TouchableOpacity
                 style={styles.fullscreenClose}
-                onPress={() => setFullscreenTier(null)}
+                onPress={() => setFullscreenShade(null)}
               >
                 <Ionicons name="close" size={28} color="#fff" />
               </TouchableOpacity>
-              <Text style={styles.fullscreenTitle}>
-                {pkgs[fullscreenTier as keyof typeof pkgs].name} — {pkgs[fullscreenTier as keyof typeof pkgs].price}
-              </Text>
-              {hasDualMode && (
-                <Text style={styles.fullscreenModeLabel}>
-                  {fullscreenMode === "kontext" ? "Kontext 2-Pass" : "FLUX.2 Pro Edit"}
-                </Text>
-              )}
+              <View style={styles.fullscreenHeader}>
+                <View style={[styles.fullscreenSwatch, { backgroundColor: data.hex }]} />
+                <Text style={styles.fullscreenTitle}>{data.bmName}</Text>
+                <Text style={styles.fullscreenCode}>{data.bmCode}</Text>
+              </View>
               <BeforeAfterSlider
                 beforeUri={beforeUri}
-                afterUri={imageUrl}
+                afterUri={data.imageUrl}
                 height={SCREEN_WIDTH * 0.75}
               />
             </View>
@@ -311,60 +279,79 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   clientName: { fontSize: 22, fontWeight: "700", color: colors.text.primary },
-  subtitle: { fontSize: 14, color: colors.text.secondary, marginTop: 4, marginBottom: 12 },
-  // Mode toggle
-  modeToggleRow: {
+  subtitle: { fontSize: 14, color: colors.text.secondary, marginTop: 4, marginBottom: 16 },
+  // Shade tabs
+  shadeTabRow: {
     flexDirection: "row",
     gap: 8,
     marginBottom: 16,
   },
-  modeTab: {
+  shadeTab: {
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
     gap: 8,
-    paddingVertical: 12,
-    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 12,
     backgroundColor: colors.bg.card,
     borderWidth: 1.5,
     borderColor: "transparent",
   },
-  modeTabActive: {
+  shadeTabActive: {
     borderColor: colors.brand.teal,
     backgroundColor: `${colors.brand.teal}10`,
   },
-  modeTabText: {
-    fontSize: 13,
+  shadeTabSwatch: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.1)",
+  },
+  shadeTabName: {
+    fontSize: 11,
     fontWeight: "700",
     color: colors.text.muted,
   },
-  modeTabTextActive: {
+  shadeTabNameActive: {
     color: colors.brand.teal,
   },
-  modeReadyCount: {
-    fontSize: 12,
-    fontWeight: "600",
+  shadeTabCode: {
+    fontSize: 9,
     color: colors.text.muted,
   },
-  // Tier cards
-  tierCard: {
+  // Mockup card
+  mockupCard: {
     backgroundColor: colors.bg.card,
     borderRadius: 14,
     padding: 16,
     marginBottom: 16,
-    borderLeftWidth: 4,
-    borderLeftColor: colors.brand.teal,
   },
-  tierHeader: {
+  mockupCardHeader: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: 12,
+    alignItems: "center",
+    gap: 12,
+    marginBottom: 14,
   },
-  tierName: { fontSize: 17, fontWeight: "700", color: colors.text.primary },
-  tierFeatures: { fontSize: 13, color: colors.text.secondary, marginTop: 2, maxWidth: 220 },
-  tierPrice: { fontSize: 18, fontWeight: "800", color: colors.brand.teal },
+  headerSwatch: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: "rgba(255,255,255,0.1)",
+  },
+  mockupColorName: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: colors.text.primary,
+  },
+  mockupColorCode: {
+    fontSize: 13,
+    color: colors.text.secondary,
+  },
   shimmerContainer: {
     alignItems: "center",
     paddingVertical: 20,
@@ -387,47 +374,56 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   failedText: { fontSize: 13, fontWeight: "600", color: colors.status.error },
-  // Mode comparison badges
-  modeBadgeRow: {
-    flexDirection: "row",
-    gap: 8,
-    marginTop: 10,
-    justifyContent: "center",
-  },
-  modeBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 12,
-    backgroundColor: `${colors.text.muted}15`,
-  },
-  modeBadgeActive: {
-    backgroundColor: `${colors.brand.teal}20`,
-  },
-  modeDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  modeBadgeText: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: colors.text.secondary,
-  },
   shareOneBtn: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
-    marginTop: 10,
-    paddingVertical: 8,
-    borderRadius: 8,
+    marginTop: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: `${colors.brand.teal}40`,
   },
-  shareOneText: { fontSize: 13, fontWeight: "700", color: colors.brand.teal },
+  shareOneText: { fontSize: 14, fontWeight: "700", color: colors.brand.teal },
+  // Summary section
+  summaryLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.text.muted,
+    letterSpacing: 1,
+    marginBottom: 8,
+  },
+  summaryRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: colors.bg.card,
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 6,
+    borderWidth: 1.5,
+    borderColor: "transparent",
+  },
+  summaryRowActive: {
+    borderColor: colors.brand.teal,
+    backgroundColor: `${colors.brand.teal}08`,
+  },
+  summaryDot: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.1)",
+  },
+  summaryName: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.text.primary,
+  },
+  summaryStatus: {},
+  // Bottom bar
   bottomBar: {
     position: "absolute",
     bottom: 0,
@@ -458,6 +454,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   shareAllText: { color: "#fff", fontSize: 14, fontWeight: "700" },
+  // Fullscreen modal
   fullscreenModal: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.95)",
@@ -470,18 +467,28 @@ const styles = StyleSheet.create({
     right: 20,
     zIndex: 10,
   },
+  fullscreenHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    marginBottom: 16,
+  },
+  fullscreenSwatch: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+  },
   fullscreenTitle: {
     fontSize: 18,
     fontWeight: "700",
     color: "#fff",
-    textAlign: "center",
-    marginBottom: 6,
   },
-  fullscreenModeLabel: {
+  fullscreenCode: {
     fontSize: 13,
     fontWeight: "600",
     color: colors.brand.teal,
-    textAlign: "center",
-    marginBottom: 16,
   },
 });

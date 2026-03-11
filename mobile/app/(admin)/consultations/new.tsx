@@ -148,9 +148,9 @@ export default function NewConsultation() {
           accessories: [],
         },
         mockups: {
-          tier1: { status: "idle", imageUrl: null },
-          tier2: { status: "idle", imageUrl: null },
-          tier3: { status: "idle", imageUrl: null },
+          shade1: { status: "idle", imageUrl: null, bmCode: "HC-169", bmName: "Coventry Gray", hex: "#A7A9A5" },
+          shade2: { status: "idle", imageUrl: null, bmCode: "HC-170", bmName: "Stonington Gray", hex: "#9A9E9A" },
+          shade3: { status: "idle", imageUrl: null, bmCode: "HC-168", bmName: "Chelsea Gray", hex: "#8A8C8A" },
         },
         status: "draft",
         updatedAt: serverTimestamp(),
