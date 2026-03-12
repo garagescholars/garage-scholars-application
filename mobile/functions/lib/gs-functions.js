@@ -39,7 +39,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.gsSendPush = exports.gsSubmitComplaint = exports.gsComputeAnalytics = exports.gsMonthlyGoalReset = exports.gsResetViewerCounts = exports.gsExpireTransfers = exports.gsLockScores = exports.gsOnRescheduleUpdated = exports.gsOnTransferCreated = exports.gsOnJobUpdated = void 0;
+exports.gsSendPush = exports.gsSubmitComplaint = exports.gsComputeAnalytics = exports.gsMonthlyGoalReset = exports.gsResetViewerCounts = exports.gsExpireTransfers = exports.gsLockScores = exports.gsOnRescheduleUpdated = exports.gsOnTransferCreated = exports.gsOnJobUpdated = exports.gsScoreJob = void 0;
 const firestore_1 = require("firebase-functions/v2/firestore");
 const scheduler_1 = require("firebase-functions/v2/scheduler");
 const https_1 = require("firebase-functions/v2/https");
@@ -47,6 +47,7 @@ const firestore_2 = require("firebase-admin/firestore");
 const gs_constants_1 = require("./gs-constants");
 const gs_payments_1 = require("./gs-payments");
 const gs_catalog_1 = require("./gs-catalog");
+const generative_ai_1 = require("@google/generative-ai");
 const db = (0, firestore_2.getFirestore)();
 // Max Firestore batch size
 const BATCH_LIMIT = 500;
@@ -75,10 +76,22 @@ async function getPushToken(uid) {
     const snap = await db.collection(gs_constants_1.GS_COLLECTIONS.PROFILES).doc(uid).get();
     return snap.exists ? snap.data()?.pushToken || null : null;
 }
-// Helper: get all admin push tokens
-async function getAdminTokens() {
+async function getAdminTokens(category) {
     const snap = await db.collection(gs_constants_1.GS_COLLECTIONS.PROFILES).where("role", "==", "admin").get();
-    return snap.docs.map((d) => d.data().pushToken).filter(Boolean);
+    return snap.docs
+        .filter((d) => {
+        const token = d.data().pushToken;
+        if (!token)
+            return false;
+        // If category specified, check notification preferences (default to true)
+        if (category) {
+            const prefs = d.data().notificationPrefs;
+            if (prefs && prefs[category] === false)
+                return false;
+        }
+        return true;
+    })
+        .map((d) => d.data().pushToken);
 }
 // Helper: determine tier from payScore
 function getTierFromScore(score) {
@@ -106,10 +119,193 @@ async function commitInChunks(ops) {
         await batch.commit();
     }
 }
+/**
+ * AI Photo Scoring — uses Gemini Vision to analyze before/after photos.
+ * Scores photo quality on 5 criteria:
+ *   1. Clarity & focus (not blurry)
+ *   2. Proper lighting (well-lit, visible)
+ *   3. Correct angles (shows the full work area)
+ *   4. Before vs After comparison (clear difference visible)
+ *   5. Professional presentation (clean framing, no clutter blocking view)
+ *
+ * Returns a score 0-5. Falls back to 3.0 (neutral) if AI fails.
+ */
+async function autoScorePhotos(jobId) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+        console.warn("GEMINI_API_KEY not set — skipping AI photo scoring");
+        return 3.0;
+    }
+    // Get before/after photos from checkin doc
+    const checkinSnap = await db.collection(gs_constants_1.GS_COLLECTIONS.JOB_CHECKINS)
+        .where("jobId", "==", jobId).limit(1).get();
+    if (checkinSnap.empty) {
+        console.warn(`No checkin doc for job ${jobId} — default photo score 3.0`);
+        await db.collection(gs_constants_1.GS_COLLECTIONS.JOB_QUALITY_SCORES).doc(jobId).update({
+            photoQualityScore: 3.0,
+            aiPhotoScorePending: false,
+            aiPhotoScoreNote: "No checkin photos found",
+        });
+        return 3.0;
+    }
+    const checkinData = checkinSnap.docs[0].data();
+    const beforePhotos = checkinData.beforePhotos || [];
+    const afterPhotos = checkinData.afterPhotos || [];
+    if (beforePhotos.length === 0 && afterPhotos.length === 0) {
+        await db.collection(gs_constants_1.GS_COLLECTIONS.JOB_QUALITY_SCORES).doc(jobId).update({
+            photoQualityScore: 1.0,
+            aiPhotoScorePending: false,
+            aiPhotoScoreNote: "No photos uploaded",
+        });
+        return 1.0;
+    }
+    try {
+        // Download up to 3 before + 3 after photos for analysis (limit cost)
+        const photoUrls = [
+            ...beforePhotos.slice(0, 3).map((u) => ({ url: u, type: "before" })),
+            ...afterPhotos.slice(0, 3).map((u) => ({ url: u, type: "after" })),
+        ];
+        const imageParts = await Promise.all(photoUrls.map(async ({ url }) => {
+            const resp = await fetch(url);
+            if (!resp.ok)
+                throw new Error(`Failed to download: ${url}`);
+            const buffer = Buffer.from(await resp.arrayBuffer());
+            return {
+                inlineData: {
+                    data: buffer.toString("base64"),
+                    mimeType: "image/jpeg",
+                },
+            };
+        }));
+        const photoLabels = photoUrls.map((p) => p.type).join(", ");
+        const prompt = `You are a quality inspector for a garage organization and home service company.
+
+You are reviewing ${beforePhotos.length} BEFORE photos and ${afterPhotos.length} AFTER photos from a job. The photos are in order: ${photoLabels}.
+
+Score the photo documentation quality on these 5 criteria (each 1-5):
+
+1. CLARITY: Are photos in focus, not blurry? Can you clearly see the work area?
+2. LIGHTING: Are photos well-lit? Can you see details?
+3. ANGLES: Do the photos show the full work area from useful angles?
+4. TRANSFORMATION: Is there a clear visible difference between before and after? Does the after show improvement?
+5. PROFESSIONALISM: Are photos framed well? No fingers blocking lens, no random clutter obscuring the view?
+
+If there are NO before photos, score TRANSFORMATION as 1.
+If there are NO after photos, score everything as 1.
+
+Respond ONLY with a JSON object, no markdown:
+{"clarity":0,"lighting":0,"angles":0,"transformation":0,"professionalism":0,"overall":0.0,"note":"one sentence summary"}
+
+The "overall" field should be the weighted average: overall = (clarity + lighting + angles + transformation*2 + professionalism) / 6, rounded to 1 decimal.`;
+        const genAI = new generative_ai_1.GoogleGenerativeAI(apiKey);
+        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        const result = await model.generateContent([prompt, ...imageParts]);
+        const text = result.response.text()?.trim() || "";
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) {
+            throw new Error("Gemini did not return valid JSON");
+        }
+        const parsed = JSON.parse(jsonMatch[0]);
+        const score = Math.max(0, Math.min(5, parseFloat(parsed.overall) || 3.0));
+        await db.collection(gs_constants_1.GS_COLLECTIONS.JOB_QUALITY_SCORES).doc(jobId).update({
+            photoQualityScore: score,
+            aiPhotoScorePending: false,
+            aiPhotoScoreNote: parsed.note || "",
+            aiPhotoScoreDetail: {
+                clarity: parsed.clarity || 0,
+                lighting: parsed.lighting || 0,
+                angles: parsed.angles || 0,
+                transformation: parsed.transformation || 0,
+                professionalism: parsed.professionalism || 0,
+            },
+        });
+        console.log(`AI photo score for job ${jobId}: ${score} — ${parsed.note}`);
+        return score;
+    }
+    catch (err) {
+        console.error(`AI photo scoring failed for ${jobId}:`, err);
+        // Fall back to neutral score
+        await db.collection(gs_constants_1.GS_COLLECTIONS.JOB_QUALITY_SCORES).doc(jobId).update({
+            photoQualityScore: 3.0,
+            aiPhotoScorePending: false,
+            aiPhotoScoreNote: "AI scoring failed — default score applied",
+        });
+        return 3.0;
+    }
+}
+/**
+ * Callable: Re-run AI photo scoring for a job (admin use).
+ * Also allows admin to manually override any score.
+ */
+exports.gsScoreJob = (0, https_1.onCall)({
+    cors: true,
+    timeoutSeconds: 60,
+    memory: "512MiB",
+    secrets: ["GEMINI_API_KEY"],
+}, async (request) => {
+    if (!request.auth) {
+        throw new https_1.HttpsError("unauthenticated", "Authentication required.");
+    }
+    const profileSnap = await db.collection(gs_constants_1.GS_COLLECTIONS.PROFILES).doc(request.auth.uid).get();
+    if (!profileSnap.exists || profileSnap.data()?.role !== "admin") {
+        throw new https_1.HttpsError("permission-denied", "Admin role required.");
+    }
+    const { jobId, photoQualityScore, completionScore, timelinessScore, rerunAi } = request.data;
+    if (!jobId) {
+        throw new https_1.HttpsError("invalid-argument", "jobId is required.");
+    }
+    const scoreRef = db.collection(gs_constants_1.GS_COLLECTIONS.JOB_QUALITY_SCORES).doc(jobId);
+    const scoreSnap = await scoreRef.get();
+    if (!scoreSnap.exists) {
+        throw new https_1.HttpsError("not-found", "Quality score document not found for this job.");
+    }
+    if (scoreSnap.data()?.scoreLocked) {
+        throw new https_1.HttpsError("failed-precondition", "Score is already locked and cannot be changed.");
+    }
+    // If rerunAi, re-score photos
+    if (rerunAi) {
+        await autoScorePhotos(jobId);
+    }
+    // Apply any manual overrides
+    const updates = {
+        adminReviewedBy: request.auth.uid,
+        adminReviewedAt: firestore_2.FieldValue.serverTimestamp(),
+    };
+    if (photoQualityScore !== undefined) {
+        updates.photoQualityScore = Math.max(0, Math.min(5, photoQualityScore));
+        updates.adminOverrodePhoto = true;
+    }
+    if (completionScore !== undefined) {
+        updates.completionScore = Math.max(0, Math.min(5, completionScore));
+        updates.adminOverrodeCompletion = true;
+    }
+    if (timelinessScore !== undefined) {
+        updates.timelinessScore = Math.max(0, Math.min(5, timelinessScore));
+        updates.adminOverrodeTimeliness = true;
+    }
+    await scoreRef.update(updates);
+    // Return the updated scores
+    const updatedSnap = await scoreRef.get();
+    const d = updatedSnap.data();
+    return {
+        ok: true,
+        scores: {
+            photoQualityScore: d.photoQualityScore,
+            completionScore: d.completionScore,
+            timelinessScore: d.timelinessScore,
+            aiPhotoScoreNote: d.aiPhotoScoreNote || "",
+            aiPhotoScoreDetail: d.aiPhotoScoreDetail || null,
+        },
+    };
+});
 // ═══════════════════════════════════════════════════════════════
 // 1. FIRESTORE TRIGGER: gs_jobs status changes
 // ═══════════════════════════════════════════════════════════════
-exports.gsOnJobUpdated = (0, firestore_1.onDocumentWritten)({ document: `${gs_constants_1.GS_COLLECTIONS.JOBS}/{jobId}`, secrets: ["STRIPE_SECRET_KEY"] }, async (event) => {
+exports.gsOnJobUpdated = (0, firestore_1.onDocumentWritten)({
+    document: `${gs_constants_1.GS_COLLECTIONS.JOBS}/{jobId}`,
+    secrets: ["STRIPE_SECRET_KEY", "GEMINI_API_KEY"],
+    memory: "512MiB",
+}, async (event) => {
     const before = event.data?.before?.data();
     const after = event.data?.after?.data();
     if (!after)
@@ -183,28 +379,71 @@ exports.gsOnJobUpdated = (0, firestore_1.onDocumentWritten)({ document: `${gs_co
         catch (err) {
             console.error(`createCheckinPayout failed for job ${jobId}:`, err);
         }
-        const adminTokens = await getAdminTokens();
+        const adminTokens = await getAdminTokens("scholarCheckins");
         if (adminTokens.length > 0) {
             await sendExpoPush(adminTokens, "Scholar Checked In", `${after.claimedByName || "A scholar"} checked in for "${after.title}"`, { screen: "admin-jobs", jobId });
         }
     }
     // ── IN_PROGRESS → REVIEW_PENDING (checked out) ──
     if (oldStatus === "IN_PROGRESS" && newStatus === "REVIEW_PENDING") {
-        // Create initial quality score doc
+        // Auto-calculate timeliness score from timestamps
+        let timelinessScore = 5.0; // default: on time
+        try {
+            const checkinSnap = await db.collection(gs_constants_1.GS_COLLECTIONS.JOB_CHECKINS)
+                .where("jobId", "==", jobId).limit(1).get();
+            if (!checkinSnap.empty) {
+                const checkinData = checkinSnap.docs[0].data();
+                const checkinTime = checkinData.checkinTime?.toDate?.();
+                if (checkinTime && after.scheduledDate && after.scheduledTimeStart) {
+                    const scheduled = new Date(`${after.scheduledDate} ${after.scheduledTimeStart}`);
+                    const diffMinutes = (checkinTime.getTime() - scheduled.getTime()) / 60000;
+                    // Score: 5.0 if on time or early, -0.5 per 10 min late, min 0
+                    if (diffMinutes > 0) {
+                        timelinessScore = Math.max(0, 5.0 - (diffMinutes / 10) * 0.5);
+                    }
+                }
+            }
+        }
+        catch (err) {
+            console.error("Error calculating timeliness:", err);
+        }
+        // Auto-calculate completion score from checklist
+        let completionScore = 5.0; // default: all done
+        try {
+            const checklist = after.checklist || [];
+            if (checklist.length > 0) {
+                const completed = checklist.filter((c) => c.completed).length;
+                completionScore = Math.round((completed / checklist.length) * 5 * 10) / 10;
+            }
+        }
+        catch (err) {
+            console.error("Error calculating completion:", err);
+        }
+        // Create quality score doc with auto-calculated scores
+        // photoQualityScore starts at 0 — filled by AI Vision or admin
         await db.collection(gs_constants_1.GS_COLLECTIONS.JOB_QUALITY_SCORES).doc(jobId).set({
             jobId,
             scholarId: after.claimedBy || "",
-            photoQualityScore: 0,
-            completionScore: 0,
-            timelinessScore: 0,
-            finalScore: 0,
+            photoQualityScore: 0, // Pending AI scoring or admin review
+            completionScore,
+            timelinessScore,
+            finalScore: 0, // Calculated when score is locked
+            autoScored: true,
+            aiPhotoScorePending: true,
             customerComplaint: false,
             scoreLocked: false,
             scoreLockedAt: null,
             complaintWindowEnd: firestore_2.Timestamp.fromDate(new Date(Date.now() + gs_constants_1.SCORE_LOCK_HOURS * 60 * 60 * 1000)),
             createdAt: firestore_2.FieldValue.serverTimestamp(),
         }, { merge: true });
-        const adminTokens = await getAdminTokens();
+        // Trigger async AI photo scoring (fire and forget — won't block checkout)
+        try {
+            await autoScorePhotos(jobId);
+        }
+        catch (err) {
+            console.error(`AI photo scoring failed for job ${jobId}:`, err);
+        }
+        const adminTokens = await getAdminTokens("jobReviews");
         if (adminTokens.length > 0) {
             await sendExpoPush(adminTokens, "Job Ready for Review", `${after.claimedByName || "A scholar"} completed "${after.title}" — review needed`, { screen: "admin-jobs", jobId });
         }
@@ -1011,7 +1250,7 @@ exports.gsSubmitComplaint = (0, https_1.onCall)({ cors: true, timeoutSeconds: 60
         disputeAt: firestore_2.FieldValue.serverTimestamp(),
     });
     // Notify admins
-    const adminTokens = await getAdminTokens();
+    const adminTokens = await getAdminTokens("complaints");
     if (adminTokens.length > 0) {
         await sendExpoPush(adminTokens, "Customer Complaint", `Complaint filed for "${jobData.title}" — review needed`, { screen: "admin-jobs", jobId });
     }

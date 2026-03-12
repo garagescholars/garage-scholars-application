@@ -478,6 +478,19 @@ export default function ConfigureConsultation() {
         </View>
       )}
 
+      {/* AR Mockup Button */}
+      <TouchableOpacity
+        style={styles.arBtn}
+        onPress={() => router.push(`/(admin)/consultations/${id}/ar-mockup` as any)}
+      >
+        <Ionicons name="cube-outline" size={22} color="#f59e0b" />
+        <Text style={styles.arBtnText}>AR Product Placement</Text>
+      </TouchableOpacity>
+
+      <Text style={styles.hint}>
+        Point your camera at the garage and place products in real-time using augmented reality.
+      </Text>
+
       {/* Generate Button */}
       <TouchableOpacity
         style={[styles.generateBtn, generating && styles.generateBtnDisabled]}
@@ -810,6 +823,22 @@ const styles = StyleSheet.create({
     color: colors.text.muted,
     textAlign: "center",
   },
+  arBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    borderWidth: 1.5,
+    borderColor: "#f59e0b",
+    borderRadius: 14,
+    paddingVertical: 16,
+    marginTop: 28,
+  },
+  arBtnText: {
+    color: "#f59e0b",
+    fontSize: 17,
+    fontWeight: "700",
+  },
   generateBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -818,7 +847,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.brand.teal,
     borderRadius: 14,
     paddingVertical: 16,
-    marginTop: 28,
+    marginTop: 12,
   },
   generateBtnDisabled: { opacity: 0.6 },
   generateBtnText: { color: "#fff", fontSize: 17, fontWeight: "700" },

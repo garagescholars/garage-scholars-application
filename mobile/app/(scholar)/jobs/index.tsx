@@ -25,7 +25,7 @@ export default function JobFeedScreen() {
   const [search, setSearch] = useState("");
   const [refreshing, setRefreshing] = useState(false);
 
-  const firstName = (profile?.fullName || profile?.scholarName || "").split(" ")[0];
+  const firstName = (profile?.name || "").split(" ")[0];
 
   const filtered = search.trim()
     ? jobs.filter(

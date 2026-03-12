@@ -72,6 +72,17 @@
           "icon": "./assets/notification-icon.png",
           "color": "#0f1b2d"
         }
+      ],
+      [
+        "@reactvision/react-viro",
+        {
+          "ios": {
+            "cameraUsagePermission": "Garage Scholars uses your camera for AR product visualization."
+          },
+          "android": {
+            "xRMode": ["AR"]
+          }
+        }
       ]
     ]
   }

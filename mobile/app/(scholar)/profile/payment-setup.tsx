@@ -29,7 +29,7 @@ export default function PaymentSetupScreen() {
   const { bankLinked, bankLast4, bankAccountType, loading } = useBankStatus(profile?.uid);
 
   // Form state
-  const [accountHolderName, setAccountHolderName] = useState(profile?.displayName || "");
+  const [accountHolderName, setAccountHolderName] = useState(profile?.name || "");
   const [routingNumber, setRoutingNumber] = useState("");
   const [accountNumber, setAccountNumber] = useState("");
   const [confirmAccountNumber, setConfirmAccountNumber] = useState("");
