@@ -53,6 +53,11 @@ David Test/jpg/
 David Test/*.HEIC
 David Test/*.jpg
 David Test/*.png
+# Test output directories (binary PNG outputs)
+David Test/test_*/
+David Test/test_3pass/
+David Test/test_with_refs/
+David Test/paint_samples/
 ~$*
 
 # Mockups — AI mockup experiments, test images, large binaries

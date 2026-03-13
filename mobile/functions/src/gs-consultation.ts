@@ -139,8 +139,11 @@ function buildGeometryConstraints(doc: any): string {
   const parts = [
     `Garage type: ${SIZE_DESC[size] || SIZE_DESC["2-car"]}.`,
     `Ceiling: ${CEILING_DESC[ceiling] || CEILING_DESC["9ft"]}.`,
-    "The garage has an interior door on one side wall — do NOT place cabinets, shelving, or storage in front of or blocking this door.",
-    hasCars ? "There may be cars or vehicles parked — remove them entirely from the transformed view." : "",
+    // Door placement rules — applied globally to every pass
+    "INTERIOR DOOR RULE: The garage has an interior door on one side wall. Do NOT place any storage, cabinets, shelving, racks, or equipment in front of, blocking, or within the swing arc of this door. The door must be able to open fully without hitting anything.",
+    "WINDOW RULE: Any windows on the walls must remain fully visible and unobstructed. Split cabinet runs and shelving into separate modular sections around windows — never place items directly in front of a window.",
+    "GARAGE DOOR RULE: Do NOT attach, mount, or place any items on or within 2 feet of the garage door, garage door tracks, or garage door rails.",
+    hasCars ? "VEHICLES: There may be cars or vehicles parked — remove them entirely from the transformed view." : "",
   ];
 
   return parts.filter(Boolean).join(" ");
@@ -244,7 +247,8 @@ function buildOverheadAboveDoorPrompt(): string {
 }
 
 /**
- * Shelving prompt — scaled to garage size.
+ * Shelving prompt — modular units placed beside the window, never in front of it.
+ * Door clearance: nothing placed within 3 feet of the interior door swing arc.
  */
 function buildShelvingPrompt(doc: any): string {
   const size = doc.garageSize || "2-car";
@@ -253,15 +257,20 @@ function buildShelvingPrompt(doc: any): string {
   return (
     SPATIAL +
     `Add ${count} 5-tier gray steel shelving unit${count !== "one" ? "s" : ""} ` +
-    "(each approximately 72 inches tall, 48 inches wide) standing flush against the CENTER of the back wall. " +
+    "(each approximately 72 inches tall, 48 inches wide) standing flush against the back wall. " +
+    "CRITICAL placement rules: " +
+    "(1) WINDOWS — place shelving units to the LEFT or RIGHT of the window, NEVER directly in front of it. The window must remain fully visible and unobstructed. If only one wall section fits a unit, place it on the largest open section. " +
+    "(2) INTERIOR DOOR CLEARANCE — leave at least 3 feet of clear floor space in front of and beside the interior door so it can swing fully open without hitting any shelving. Do NOT place any shelving within the door swing arc. " +
+    "(3) GARAGE DOOR — do NOT place shelving in the path of the garage door or within 2 feet of the garage door tracks. " +
     "Each unit has 5 shelves fully loaded with Greenmade 27-gallon storage bins (gray body, green snap lid). " +
-    "The shelving units do not block any windows or the interior door. " +
     "Nothing else changes."
   );
 }
 
 /**
- * Cabinet prompt — scaled to garage size, respects interior door.
+ * Cabinet prompt — modular sections around windows and doors.
+ * The window on the back wall is a hard break — cabinets split into
+ * independent left and right sections with the window fully visible between them.
  */
 function buildCabinetPrompt(doc: any): string {
   const size = doc.garageSize || "2-car";
@@ -269,10 +278,16 @@ function buildCabinetPrompt(doc: any): string {
 
   return (
     SPATIAL +
-    `Add NewAge Bold Series black steel garage cabinets along the back wall: ` +
-    `base cabinets (36 inches tall, 18 inches deep) running ${runLength} across the full back wall ` +
-    "with a continuous stainless steel countertop, and matching black steel wall cabinets mounted above the countertop. " +
-    "The cabinets run wall-to-wall across the back wall only — do NOT extend onto the left or right walls. " +
+    `Add NewAge Bold Series black steel garage cabinets along the back wall in two MODULAR SECTIONS split around the window: ` +
+    `Section 1: base cabinets running from the LEFT corner of the back wall to the LEFT edge of the window, ` +
+    `with a stainless steel countertop and matching upper wall cabinets mounted above on that left section. ` +
+    `Section 2: base cabinets running from the RIGHT edge of the window to the RIGHT corner of the back wall, ` +
+    `with a stainless steel countertop and matching upper wall cabinets mounted above on that right section. ` +
+    "The window is LEFT COMPLETELY OPEN and VISIBLE between the two cabinet sections — " +
+    "NO cabinets, NO shelves, and NO upper cabinets are placed in front of, over, or blocking the window in any way. " +
+    "The total cabinet run is approximately " + runLength + " split across both sections. " +
+    "All cabinets are flush to the back wall, perfectly level, with clean brushed stainless hardware. " +
+    "Do NOT place any cabinets on the left or right side walls. " +
     "Do NOT place cabinets in front of or blocking the interior door on the side wall. " +
     "Do NOT attach anything to the garage door, door tracks, or door rails. " +
     "Nothing else changes."
