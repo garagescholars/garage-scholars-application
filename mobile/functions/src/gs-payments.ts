@@ -27,7 +27,7 @@ import {
   CLIENT_DEPOSIT_PERCENT,
   CLIENT_BALANCE_PERCENT,
 } from "./gs-constants";
-import { sendMercuryPayout } from "./gs-mercury";
+import { sendMercuryPayout, checkBalanceAndAlert, getMercuryBalance } from "./gs-mercury";
 
 const db = getFirestore();
 
@@ -398,10 +398,49 @@ export const gsReleaseCompletionPayouts = onSchedule(
               secondHalf,
               `Completion payout: ${jobData.title || jobId}`
             );
-            payoutData.status = result.status;
-            payoutData.paymentMethod = result.method;
-            if (result.transferId) payoutData.mercuryTransferId = result.transferId;
-            if (result.error) payoutData.notes = `Mercury: ${result.error}`;
+
+            // If insufficient funds, queue the payout for retry
+            if (result.status === "queued_insufficient_funds") {
+              payoutData.status = "queued_insufficient_funds";
+              payoutData.paymentMethod = "mercury_ach";
+              payoutData.notes = result.error || "Queued — Mercury insufficient funds";
+              payoutData.queuedAt = FieldValue.serverTimestamp();
+              payoutData.recipientBankInfo = {
+                name: bankInfo.accountHolderName || jobData.claimedByName || "Scholar",
+                routingNumber: bankInfo.bankRouting,
+                accountNumber: bankInfo.bankAccount,
+                accountType: bankInfo.bankAccountType || "checking",
+              };
+
+              // Alert admins about insufficient funds
+              const alertTokens = await getAdminTokens("mercuryAlerts");
+              const alertEmails = await getAdminEmails("mercuryAlerts");
+              await checkBalanceAndAlert(
+                mercury.apiKey, mercury.accountId,
+                alertTokens, alertEmails,
+                secondHalf, jobData.claimedByName || "Scholar"
+              );
+            } else {
+              payoutData.status = result.status;
+              payoutData.paymentMethod = result.method;
+              if (result.transferId) payoutData.mercuryTransferId = result.transferId;
+              if (result.error) payoutData.notes = `Mercury: ${result.error}`;
+
+              // Check balance after successful payout and alert if low
+              if (result.method === "mercury_ach") {
+                try {
+                  const alertTokens = await getAdminTokens("mercuryAlerts");
+                  const alertEmails = await getAdminEmails("mercuryAlerts");
+                  await checkBalanceAndAlert(
+                    mercury.apiKey, mercury.accountId,
+                    alertTokens, alertEmails,
+                    secondHalf, jobData.claimedByName || "Scholar"
+                  );
+                } catch (balErr) {
+                  console.error("Balance check failed (non-blocking):", balErr);
+                }
+              }
+            }
           }
         }
 
@@ -1204,10 +1243,48 @@ export const gsResalePayout = onCall(
             amount,
             description || `Resale payout to ${customerName}`
           );
-          payoutData.status = result.status;
-          payoutData.paymentMethod = result.method;
-          if (result.transferId) payoutData.mercuryTransferId = result.transferId;
-          if (result.error) payoutData.notes += ` | ${result.error}`;
+
+          // If insufficient funds, queue for retry
+          if (result.status === "queued_insufficient_funds") {
+            payoutData.status = "queued_insufficient_funds";
+            payoutData.paymentMethod = "mercury_ach";
+            payoutData.notes += ` | ${result.error}`;
+            payoutData.queuedAt = FieldValue.serverTimestamp();
+            payoutData.recipientBankInfo = {
+              name: customerName,
+              routingNumber: bankRouting,
+              accountNumber: bankAccount,
+              accountType: stripeAccount?.bankAccountType || "checking",
+            };
+
+            const alertTokens = await getAdminTokens("mercuryAlerts");
+            const alertEmails = await getAdminEmails("mercuryAlerts");
+            await checkBalanceAndAlert(
+              mercury.apiKey, mercury.accountId,
+              alertTokens, alertEmails,
+              amount, customerName
+            );
+          } else {
+            payoutData.status = result.status;
+            payoutData.paymentMethod = result.method;
+            if (result.transferId) payoutData.mercuryTransferId = result.transferId;
+            if (result.error) payoutData.notes += ` | ${result.error}`;
+
+            // Check balance after successful payout
+            if (result.method === "mercury_ach") {
+              try {
+                const alertTokens = await getAdminTokens("mercuryAlerts");
+                const alertEmails = await getAdminEmails("mercuryAlerts");
+                await checkBalanceAndAlert(
+                  mercury.apiKey, mercury.accountId,
+                  alertTokens, alertEmails,
+                  amount, customerName
+                );
+              } catch (balErr) {
+                console.error("Balance check failed (non-blocking):", balErr);
+              }
+            }
+          }
         }
       }
     }
@@ -2865,5 +2942,512 @@ export const gsSendResalePaymentLink = onCall(
       alreadyHasBankInfo,
       accountDocId,
     };
+  }
+);
+
+// =========================================================================
+// TEST: Mercury connectivity check (temporary — remove after testing)
+// =========================================================================
+
+export const gsTestMercuryPing = onRequest(
+  { cors: true, timeoutSeconds: 30, secrets: ["MERCURY_API_KEY", "STRIPE_SECRET_KEY"] },
+  async (req, res) => {
+    const testType = req.query.test as string || "mercury_accounts";
+
+    // --- Mercury accounts ---
+    // --- Save linked Chase ID to Firestore (one-time setup) ---
+    if (testType === "save_chase_link") {
+      try {
+        await db.collection(GS_COLLECTIONS.PLATFORM_CONFIG).doc("payments").set({
+          mercuryLinkedChaseAccountId: "0863ffec-1ce3-11f1-b9e5-91353778e303",
+          mercuryAccountId: "dd4edaa4-1cc7-11f1-9a7b-074b5d90750a",
+        }, { merge: true });
+        res.json({ success: true, message: "Chase linked account ID saved to Firestore" });
+      } catch (err: any) {
+        res.json({ error: err.message });
+      }
+      return;
+    }
+
+    if (testType === "mercury_accounts") {
+      const apiKey = process.env.MERCURY_API_KEY;
+      if (!apiKey) { res.json({ error: "No MERCURY_API_KEY" }); return; }
+      try {
+        const resp = await fetch("https://api.mercury.com/api/v1/accounts", {
+          headers: { Authorization: `Bearer ${apiKey}` },
+        });
+        const data = await resp.json();
+        res.json({ status: resp.status, data });
+      } catch (err: any) {
+        res.json({ error: err.message });
+      }
+      return;
+    }
+
+    // --- Mercury linked external accounts — try every possible endpoint ---
+    if (testType === "mercury_linked") {
+      const apiKey = process.env.MERCURY_API_KEY;
+      if (!apiKey) { res.json({ error: "No MERCURY_API_KEY" }); return; }
+      const base = "https://api.mercury.com/api/v1";
+      const hdrs = { Authorization: `Bearer ${apiKey}` };
+      const results: Record<string, any> = {};
+      const acctId = "dd4edaa4-1cc7-11f1-9a7b-074b5d90750a";
+
+      const endpoints = [
+        "external-accounts",
+        "linked-accounts",
+        `account/${acctId}/external-accounts`,
+        `account/${acctId}/linked-accounts`,
+        `account/${acctId}/transfers`,
+        `account/${acctId}/transactions?limit=5`,
+      ];
+
+      for (const ep of endpoints) {
+        try {
+          const resp = await fetch(`${base}/${ep}`, { headers: hdrs });
+          const txt = await resp.text();
+          let data;
+          try { data = JSON.parse(txt); } catch { data = txt; }
+          results[ep] = { status: resp.status, data };
+        } catch (err: any) {
+          results[ep] = { error: err.message };
+        }
+      }
+
+      res.json(results);
+      return;
+    }
+
+    // --- Stripe $1 invoice to Tyler ---
+    if (testType === "stripe_invoice") {
+      try {
+        const stripe = getStripe();
+        const customerEmail = "tylerzsodia@gmail.com";
+        const customerName = "Tyler Sodia";
+
+        const existing = await stripe.customers.list({ email: customerEmail, limit: 1 });
+        const customer = existing.data.length > 0
+          ? existing.data[0]
+          : await stripe.customers.create({ email: customerEmail, name: customerName });
+
+        const invoice = await stripe.invoices.create({
+          customer: customer.id,
+          collection_method: "send_invoice",
+          days_until_due: 3,
+          description: "TEST — Garage Scholars $1 Invoice Test",
+          metadata: { test: "true", platform: "garage_scholars" },
+        });
+
+        await stripe.invoiceItems.create({
+          customer: customer.id,
+          invoice: invoice.id,
+          amount: 100,
+          currency: "usd",
+          description: "Test Invoice — $1.00",
+        });
+
+        const finalized = await stripe.invoices.finalizeInvoice(invoice.id);
+        await stripe.invoices.sendInvoice(invoice.id);
+
+        res.json({
+          success: true,
+          invoiceId: finalized.id,
+          status: finalized.status,
+          hostedUrl: finalized.hosted_invoice_url,
+          customerEmail,
+          amount: "$1.00",
+        });
+      } catch (err: any) {
+        res.json({ error: err.message });
+      }
+      return;
+    }
+
+    // --- Mercury $1 payout test ---
+    if (testType === "mercury_payout") {
+      try {
+        const mercuryConfig = await getMercuryConfig();
+        if (!mercuryConfig) {
+          res.json({ error: "Mercury not configured" });
+          return;
+        }
+
+        const routingNumber = req.query.routing as string;
+        const accountNumber = req.query.account as string;
+        const accountName = req.query.name as string || "Test Worker";
+
+        if (!routingNumber || !accountNumber) {
+          res.json({ error: "Pass ?test=mercury_payout&routing=XXXXXXXXX&account=XXXXXXXX&name=Name" });
+          return;
+        }
+
+        const payoutResult = await sendMercuryPayout(
+          mercuryConfig.apiKey,
+          mercuryConfig.accountId,
+          { name: accountName, routingNumber, accountNumber, accountType: "checking" },
+          1.00,
+          "TEST — Garage Scholars $1 payout test"
+        );
+        res.json({ success: true, payout: payoutResult });
+      } catch (err: any) {
+        res.json({ error: err.message });
+      }
+      return;
+    }
+
+    res.json({ usage: "?test=mercury_accounts | ?test=stripe_invoice | ?test=mercury_payout&routing=XXX&account=XXX&name=XXX" });
+  }
+);
+
+// =========================================================================
+// TEST: Stripe Invoice + Mercury Payout Test
+// =========================================================================
+
+export const gsTestPaymentSystems = onCall(
+  { cors: true, timeoutSeconds: 60, secrets: ["STRIPE_SECRET_KEY", "MERCURY_API_KEY"] },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Authentication required.");
+    }
+
+    const profileSnap = await db.collection(GS_COLLECTIONS.PROFILES).doc(request.auth.uid).get();
+    if (!profileSnap.exists || profileSnap.data()?.role !== "admin") {
+      throw new HttpsError("permission-denied", "Admin role required.");
+    }
+
+    const { test } = request.data as { test: "stripe_invoice" | "mercury_payout" | "mercury_accounts" };
+    const results: Record<string, unknown> = {};
+
+    // --- Test 1: Get Mercury accounts (to find account ID) ---
+    if (test === "mercury_accounts") {
+      const apiKey = process.env.MERCURY_API_KEY;
+      if (!apiKey) throw new HttpsError("failed-precondition", "MERCURY_API_KEY not set");
+
+      const resp = await fetch("https://api.mercury.com/api/v1/accounts", {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      if (!resp.ok) {
+        const errText = await resp.text();
+        throw new HttpsError("internal", `Mercury API error: ${resp.status} ${errText}`);
+      }
+      const data = await resp.json();
+      results.mercuryAccounts = data;
+      return results;
+    }
+
+    // --- Test 2: Send $1 Stripe invoice ---
+    if (test === "stripe_invoice") {
+      const stripe = getStripe();
+      const customerEmail = "tylerzsodia@gmail.com";
+      const customerName = "Tyler Sodia";
+
+      // Find or create Stripe customer
+      const existing = await stripe.customers.list({ email: customerEmail, limit: 1 });
+      let customer;
+      if (existing.data.length > 0) {
+        customer = existing.data[0];
+      } else {
+        customer = await stripe.customers.create({ email: customerEmail, name: customerName });
+      }
+
+      // Create invoice
+      const invoice = await stripe.invoices.create({
+        customer: customer.id,
+        collection_method: "send_invoice",
+        days_until_due: 3,
+        description: "TEST — Garage Scholars $1 Invoice Test",
+        metadata: { test: "true", platform: "garage_scholars" },
+      });
+
+      await stripe.invoiceItems.create({
+        customer: customer.id,
+        invoice: invoice.id,
+        amount: 100, // $1.00 in cents
+        currency: "usd",
+        description: "Test Invoice — $1.00",
+      });
+
+      const finalized = await stripe.invoices.finalizeInvoice(invoice.id);
+      await stripe.invoices.sendInvoice(invoice.id);
+
+      results.stripeInvoice = {
+        invoiceId: finalized.id,
+        status: finalized.status,
+        hostedUrl: finalized.hosted_invoice_url,
+        customerEmail,
+        amount: "$1.00",
+      };
+      return results;
+    }
+
+    // --- Test 3: Mercury ACH payout $1 ---
+    if (test === "mercury_payout") {
+      const mercuryConfig = await getMercuryConfig();
+      if (!mercuryConfig) {
+        throw new HttpsError("failed-precondition", "Mercury not configured. Set MERCURY_API_KEY and mercuryAccountId in gs_platformConfig/payments.");
+      }
+
+      // Use test bank info (Tyler's or a test account)
+      const { routingNumber, accountNumber, accountName, accountType } = request.data as any;
+      if (!routingNumber || !accountNumber || !accountName) {
+        throw new HttpsError("invalid-argument", "routingNumber, accountNumber, and accountName required for payout test.");
+      }
+
+      const payoutResult = await sendMercuryPayout(
+        mercuryConfig.apiKey,
+        mercuryConfig.accountId,
+        {
+          name: accountName,
+          routingNumber,
+          accountNumber,
+          accountType: accountType || "checking",
+        },
+        1.00, // $1 test
+        "TEST — Garage Scholars $1 payout test"
+      );
+
+      results.mercuryPayout = payoutResult;
+      return results;
+    }
+
+    throw new HttpsError("invalid-argument", "test must be 'stripe_invoice', 'mercury_payout', or 'mercury_accounts'");
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// 14. SCHEDULED: Retry queued Mercury payouts (runs every 6 hours)
+//     Picks up payouts that failed due to insufficient funds and
+//     retries them once Mercury has been replenished.
+// ═══════════════════════════════════════════════════════════════
+export const gsRetryQueuedPayouts = onSchedule(
+  { schedule: "every 6 hours", timeoutSeconds: 300, secrets: ["MERCURY_API_KEY"] },
+  async () => {
+    console.log("gsRetryQueuedPayouts: checking for queued payouts...");
+
+    const mercury = await getMercuryConfig();
+    if (!mercury) {
+      console.log("Mercury not configured, skipping retry.");
+      return;
+    }
+
+    // Check balance first — no point retrying if still empty
+    const balance = await getMercuryBalance(mercury.apiKey, mercury.accountId);
+    if (balance.availableBalance <= 0) {
+      console.log(`Mercury balance is $${balance.availableBalance} — skipping retry.`);
+      return;
+    }
+
+    // Get all queued payouts
+    const queuedSnap = await db
+      .collection(GS_COLLECTIONS.PAYOUTS)
+      .where("status", "==", "queued_insufficient_funds")
+      .orderBy("createdAt", "asc")
+      .get();
+
+    if (queuedSnap.empty) {
+      console.log("No queued payouts to retry.");
+      return;
+    }
+
+    console.log(`Found ${queuedSnap.size} queued payouts. Mercury balance: $${balance.availableBalance}`);
+
+    let runningBalance = balance.availableBalance;
+    let processed = 0;
+    let succeeded = 0;
+    let stillQueued = 0;
+
+    for (const doc of queuedSnap.docs) {
+      const payout = doc.data();
+      const amount = payout.amount || 0;
+
+      // Skip if not enough balance for this payout
+      if (runningBalance < amount) {
+        stillQueued++;
+        console.log(`Payout ${doc.id}: need $${amount}, only $${runningBalance} left — still queued.`);
+        continue;
+      }
+
+      // Get stored bank info
+      const bankInfo = payout.recipientBankInfo;
+      if (!bankInfo || !bankInfo.routingNumber || !bankInfo.accountNumber) {
+        console.log(`Payout ${doc.id}: no bank info stored, skipping.`);
+        continue;
+      }
+
+      processed++;
+
+      const result = await sendMercuryPayout(
+        mercury.apiKey,
+        mercury.accountId,
+        {
+          name: bankInfo.name || payout.recipientName || "Worker",
+          routingNumber: bankInfo.routingNumber,
+          accountNumber: bankInfo.accountNumber,
+          accountType: bankInfo.accountType || "checking",
+        },
+        amount,
+        `Queued payout retry: ${payout.notes || payout.recipientName || doc.id}`
+      );
+
+      if (result.status === "queued_insufficient_funds") {
+        stillQueued++;
+        console.log(`Payout ${doc.id}: still insufficient funds.`);
+        continue;
+      }
+
+      // Update payout doc with result
+      const updateData: Record<string, any> = {
+        status: result.status,
+        paymentMethod: result.method,
+        retriedAt: FieldValue.serverTimestamp(),
+        retryNotes: `Auto-retried at ${new Date().toISOString()}`,
+      };
+      if (result.transferId) updateData.mercuryTransferId = result.transferId;
+      if (result.error) updateData.retryError = result.error;
+
+      await doc.ref.update(updateData);
+      runningBalance -= amount;
+      succeeded++;
+
+      console.log(`Payout ${doc.id}: retried successfully — $${amount} to ${payout.recipientName}`);
+
+      // Notify the worker that their payout is now processing
+      if (payout.scholarId) {
+        const scholarProfile = await db.collection(GS_COLLECTIONS.PROFILES).doc(payout.scholarId).get();
+        const pushToken = scholarProfile.data()?.pushToken;
+        if (pushToken) {
+          await sendExpoPush(
+            [pushToken],
+            "Payment Processing!",
+            `Your payout of $${amount.toFixed(2)} is now being processed via direct deposit.`,
+            { screen: "payments" }
+          );
+        }
+      }
+    }
+
+    // Summary
+    console.log(`Retry complete: ${succeeded} sent, ${stillQueued} still queued, ${processed} attempted.`);
+
+    // Check balance after retries and alert if needed
+    if (succeeded > 0) {
+      try {
+        const alertTokens = await getAdminTokens("mercuryAlerts");
+        const alertEmails = await getAdminEmails("mercuryAlerts");
+        await checkBalanceAndAlert(
+          mercury.apiKey, mercury.accountId,
+          alertTokens, alertEmails
+        );
+      } catch (balErr) {
+        console.error("Post-retry balance check failed:", balErr);
+      }
+    }
+
+    // If payouts are still queued, alert admins
+    if (stillQueued > 0) {
+      const adminTokens = await getAdminTokens("mercuryAlerts");
+      const adminEmails = await getAdminEmails("mercuryAlerts");
+      const fmt = (n: number) => `$${n.toFixed(2)}`;
+
+      await db.collection("mail").add({
+        to: adminEmails.length > 0 ? adminEmails : ["garagescholars@gmail.com"],
+        message: {
+          subject: `${stillQueued} Payouts Still Queued — Mercury Needs Funding`,
+          html: `
+            <div style="font-family: sans-serif; max-width: 520px; margin: auto;">
+              <h2 style="color: #dc2626;">Queued Payouts Need Attention</h2>
+              <p><strong>${stillQueued}</strong> payout(s) are still waiting because Mercury doesn't have enough funds.</p>
+              <p>Current Mercury balance: <strong>${fmt(runningBalance)}</strong></p>
+              <p>Transfer funds from Chase to Mercury to unblock these payouts. They'll auto-retry every 6 hours.</p>
+              <p style="color:#888; font-size:0.85rem;">Garage Scholars Payment System</p>
+            </div>
+          `,
+        },
+        createdAt: FieldValue.serverTimestamp(),
+      });
+
+      if (adminTokens.length > 0) {
+        await sendExpoPush(
+          adminTokens,
+          "Payouts Waiting",
+          `${stillQueued} payout(s) queued — Mercury needs funding. Auto-retries every 6hrs.`,
+          { screen: "admin-payouts" }
+        );
+      }
+    }
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// 15. SCHEDULED: Daily Mercury balance check (9 AM Denver)
+//     Even if no payouts happened, check balance and alert if low.
+// ═══════════════════════════════════════════════════════════════
+export const gsDailyMercuryBalanceCheck = onSchedule(
+  { schedule: "0 9 * * *", timeZone: "America/Denver", timeoutSeconds: 30, secrets: ["MERCURY_API_KEY"] },
+  async () => {
+    console.log("gsDailyMercuryBalanceCheck: running...");
+
+    const mercury = await getMercuryConfig();
+    if (!mercury) {
+      console.log("Mercury not configured.");
+      return;
+    }
+
+    const balance = await getMercuryBalance(mercury.apiKey, mercury.accountId);
+    const fmt = (n: number) => `$${n.toFixed(2)}`;
+    console.log(`Mercury daily check: ${fmt(balance.availableBalance)} available (${balance.alertLevel})`);
+
+    // Count queued payouts
+    const queuedSnap = await db
+      .collection(GS_COLLECTIONS.PAYOUTS)
+      .where("status", "==", "queued_insufficient_funds")
+      .get();
+    const queuedCount = queuedSnap.size;
+    let queuedTotal = 0;
+    for (const doc of queuedSnap.docs) {
+      queuedTotal += doc.data().amount || 0;
+    }
+
+    const adminTokens = await getAdminTokens("mercuryAlerts");
+    const adminEmails = await getAdminEmails("mercuryAlerts");
+
+    // Always alert if there are queued payouts
+    if (queuedCount > 0) {
+      await checkBalanceAndAlert(mercury.apiKey, mercury.accountId, adminTokens, adminEmails);
+
+      // Extra alert specifically about queued payouts
+      await db.collection("mail").add({
+        to: adminEmails.length > 0 ? adminEmails : ["garagescholars@gmail.com"],
+        message: {
+          subject: `Daily Reminder: ${queuedCount} Payout(s) Queued (${fmt(queuedTotal)} total)`,
+          html: `
+            <div style="font-family: sans-serif; max-width: 520px; margin: auto;">
+              <div style="background:#fef2f2; border:2px solid #ef4444; border-radius:12px; padding:20px; text-align:center;">
+                <p style="margin:0; font-size:14px; color:#555;">Workers Waiting for Payment</p>
+                <p style="margin:8px 0 0; font-size:36px; font-weight:800; color:#dc2626;">${queuedCount}</p>
+                <p style="margin:4px 0 0; color:#888;">payout(s) totaling ${fmt(queuedTotal)}</p>
+              </div>
+              <p style="margin-top:16px;">Mercury balance: <strong>${fmt(balance.availableBalance)}</strong></p>
+              <p>Transfer at least <strong>${fmt(queuedTotal - balance.availableBalance + 500)}</strong> from Chase to Mercury to process these payouts (includes $500 buffer).</p>
+              <p>Payouts auto-retry every 6 hours once funded.</p>
+              <p style="color:#888; font-size:0.85rem;">Garage Scholars Payment System</p>
+            </div>
+          `,
+        },
+        createdAt: FieldValue.serverTimestamp(),
+      });
+
+      if (adminTokens.length > 0) {
+        await sendExpoPush(
+          adminTokens,
+          `${queuedCount} Payouts Waiting`,
+          `${fmt(queuedTotal)} in queued payouts. Mercury: ${fmt(balance.availableBalance)}. Fund Mercury to unblock.`,
+          { screen: "admin-payouts" }
+        );
+      }
+    } else if (balance.alertLevel !== "ok") {
+      // No queued payouts but balance is low — still alert
+      await checkBalanceAndAlert(mercury.apiKey, mercury.accountId, adminTokens, adminEmails);
+    }
   }
 );

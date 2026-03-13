@@ -54,6 +54,10 @@ export {
   gsWeeklyReplenishmentReport,
   gsFundMercuryFromChase,
   gsCpaReconciliationReport,
+  gsTestPaymentSystems,
+  gsTestMercuryPing,
+  gsRetryQueuedPayouts,
+  gsDailyMercuryBalanceCheck,
 } from "./gs-payments";
 
 // ── Garage Scholars Social Media functions ──
