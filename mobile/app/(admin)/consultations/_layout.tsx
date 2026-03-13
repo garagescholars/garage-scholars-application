@@ -14,6 +14,7 @@ export default function ConsultationsLayout() {
       <Stack.Screen name="new" options={{ title: "New Consultation" }} />
       <Stack.Screen name="[id]/configure" options={{ title: "Configure Mockups" }} />
       <Stack.Screen name="[id]/mockups" options={{ title: "Mockup Presentation" }} />
+      <Stack.Screen name="[id]/product-editor" options={{ title: "Product Placement" }} />
       <Stack.Screen
         name="[id]/ar-mockup"
         options={{ title: "AR Mockup", headerShown: false }}

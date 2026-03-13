@@ -4,6 +4,9 @@
  * Scholar points camera at the garage, selects products from the catalog,
  * taps surfaces to place them. Capture button takes a screenshot and
  * saves it to the consultation in Firestore.
+ *
+ * ViroReact is loaded via conditional require() so it never gets
+ * bundled on web — requireNativeComponent doesn't exist there.
  */
 
 import React, { useState, useRef, useCallback } from "react";
@@ -17,16 +20,42 @@ import {
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { ViroARSceneNavigator } from "@reactvision/react-viro";
 import { doc, updateDoc, arrayUnion, serverTimestamp } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { db, storage } from "../../../../src/lib/firebase";
 import { COLLECTIONS } from "../../../../src/constants/collections";
-import ARProductScene, {
-  type PlacedProduct,
-} from "../../../../src/components/ar/ARProductScene";
-import ARProductPicker from "../../../../src/components/ar/ARProductPicker";
-import type { ARProduct } from "../../../../src/constants/arProducts";
+
+// Conditionally require native-only modules to prevent web bundle crash
+const ViroARSceneNavigator =
+  Platform.OS !== "web"
+    ? require("@reactvision/react-viro").ViroARSceneNavigator
+    : null;
+
+const ARProductScene =
+  Platform.OS !== "web"
+    ? require("../../../../src/components/ar/ARProductScene").default
+    : null;
+
+const ARProductPicker =
+  Platform.OS !== "web"
+    ? require("../../../../src/components/ar/ARProductPicker").default
+    : null;
+
+type ARProduct = {
+  id: string;
+  name: string;
+  surface: string;
+  dims: { w: number; h: number; d: number };
+  color: string;
+  description: string;
+};
+
+type PlacedProduct = {
+  id: string;
+  product: ARProduct;
+  position: [number, number, number];
+  rotation: [number, number, number];
+};
 
 export default function ARMockupScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -54,17 +83,15 @@ export default function ARMockupScreen() {
 
     setCapturing(true);
     try {
-      // Take AR screenshot
       const result = await arNavigatorRef.current.sceneNavigator.takeScreenshot(
         `ar_mockup_${Date.now()}`,
-        false // saveToCameraRoll
+        false
       );
 
       if (!result.success || !result.url) {
         throw new Error("Screenshot failed");
       }
 
-      // Read the screenshot file and upload to Firebase Storage
       const response = await fetch(
         Platform.OS === "ios" ? result.url : `file://${result.url}`
       );
@@ -75,7 +102,6 @@ export default function ARMockupScreen() {
       await uploadBytes(storageRef, blob);
       const downloadUrl = await getDownloadURL(storageRef);
 
-      // Save to consultation document
       const consultRef = doc(db, COLLECTIONS.CONSULTATIONS, id);
       await updateDoc(consultRef, {
         arMockups: arrayUnion({
@@ -186,7 +212,6 @@ const styles = StyleSheet.create({
   arScene: {
     flex: 1,
   },
-  // Top bar
   topBar: {
     position: "absolute",
     top: 0,
@@ -220,7 +245,6 @@ const styles = StyleSheet.create({
     color: "#fff",
     textAlign: "center",
   },
-  // Web fallback
   webFallback: {
     flex: 1,
     backgroundColor: "#0a0f1a",

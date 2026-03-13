@@ -478,6 +478,19 @@ export default function ConfigureConsultation() {
         </View>
       )}
 
+      {/* Product Editor Button */}
+      <TouchableOpacity
+        style={styles.editorBtn}
+        onPress={() => router.push(`/(admin)/consultations/${id}/product-editor` as any)}
+      >
+        <Ionicons name="create-outline" size={22} color={colors.brand.teal} />
+        <Text style={styles.editorBtnText}>Product Placement Editor</Text>
+      </TouchableOpacity>
+
+      <Text style={styles.hint}>
+        Drag and place products onto the garage photo to create a visual layout for the client.
+      </Text>
+
       {/* AR Mockup Button */}
       <TouchableOpacity
         style={styles.arBtn}
@@ -823,6 +836,23 @@ const styles = StyleSheet.create({
     color: colors.text.muted,
     textAlign: "center",
   },
+  editorBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    backgroundColor: `${colors.brand.teal}15`,
+    borderWidth: 1.5,
+    borderColor: colors.brand.teal,
+    borderRadius: 14,
+    paddingVertical: 16,
+    marginTop: 28,
+  },
+  editorBtnText: {
+    color: colors.brand.teal,
+    fontSize: 17,
+    fontWeight: "700",
+  },
   arBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -832,7 +862,7 @@ const styles = StyleSheet.create({
     borderColor: "#f59e0b",
     borderRadius: 14,
     paddingVertical: 16,
-    marginTop: 28,
+    marginTop: 12,
   },
   arBtnText: {
     color: "#f59e0b",
