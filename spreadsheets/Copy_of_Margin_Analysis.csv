@@ -1,0 +1,101 @@
+GARAGE ORGANIZATION,,,,,,,,,
+Service,Client Price,Crew Size,Hours,Labor Cost,Materials,Haul-Away,Total Cost,Profit,Margin %
+Undergrad,1097,2 Scholars,5,430,137,150,717,380,0.346
+Graduate,2197,2 Scholars,7,602,399,150,1151,1046,0.476
+Doctorate,3797,3 Scholars,8,976,661,300,1937,1860,0.49
+Unchanged — garage org margins already strong at 34.6% – 49%.,,,,,,,,,
+GYM INSTALL — UPDATED (Gym-Zone Flooring Only on 1RM),,,,,,,,,
+Service,Client Price,Crew Size,Hours,Labor Cost,Materials,Haul-Away,Total Cost,Profit,Margin %
+Warm Up,997,2 Scholars,2.5,215,50,—,265,732,0.7340000000000001
+Super Set,1997,2 Scholars,4.5,387,100,—,487,1510,0.7559999999999999
+1 Rep Max ⬆,4797,3 Scholars,8,1032,1310,—,2342,2455,0.512
+"1RM flooring scoped to GYM ZONE ONLY (~200 sq ft / 8 cases = $960). Was full garage ($1,920). Clients add full-garage upgrade a la carte.",,,,,,,,,
+"1RM materials: Gym-zone flooring $960 + Wall storage hardware $150 + Deadlift platform lumber $200 = $1,310",,,,,,,,,
+COMBO PACKAGES — UPDATED (Accurate Stacked Labor + Gym-Zone Flooring),,,,,,,,,
+Package,Client Price,Crew,Hours,Gar. Labor,Gym Labor,Gar. Matls,Gym Matls,Haul-Away,
+The Dean's List ⬆,6497,2-3 Scholars,~1.5 Days,602,1032,399,1310,150,
+The Valedictorian ⬆,7997,3 Scholars,~2 Days,976,1032,661,1310,300,
+Package,Client Price,,,,,,Total Cost,Profit,Margin %
+The Dean's List,6497,,,,,,3493,3004,0.462
+The Valedictorian,7997,,,,,,4279,3718,0.465
+"Dean's List cost: Grad labor $602 + 1RM labor $1,032 + Grad materials $399 + Gym materials $1,310 + Haul $150 = $3,493",,,,,,,,,
+"Valedictorian cost: Doc labor $976 + 1RM labor $1,032 + Doc materials $661 + Gym materials $1,310 + Haul $300 = $4,279",,,,,,,,,
+BUNDLE DISCOUNT STRUCTURE,,,,,,,,,
+Package,Garage Price,Gym Price,Separate Total,Bundle Price,Client Saves,Save %,,,
+The Dean's List,2197,4797,6994,6497,497,0.071,,,
+The Valedictorian,3797,4797,8594,7997,597,0.069,,,
+Both combos save clients ~$500-600 vs buying separate. Clean value prop without killing your margins.,,,,,,,,,
+A LA CARTE ADD-ONS,,,,,,,,,
+Add-On,Client Price,Size,,Labor Cost,Materials,,Total Cost,Profit,Margin %
+Extra Haul-Away (per truck bed),300,Per Load,,50,100,,150,150,0.5
+Full-Garage Flooring Upgrade (~200sf extra),997,~200 sq ft,,100,960,,1060,-63,-0.063
+Click-In Flooring — 1-Car (~200sf),1497,200 sq ft,,150,960,,1110,387,0.259
+Click-In Flooring — 2-Car (~400sf),2897,400 sq ft,,250,1920,,2170,727,0.251
+Click-In Flooring — 3-Car (~600sf),4297,600 sq ft,,350,2880,,3230,1067,0.248
+Polyaspartic — 1-Car (~200sf),TBD,200 sq ft,,Sub TBD,Sub TBD,,TBD,TBD,TBD
+Polyaspartic — 2-Car (~400sf),TBD,400 sq ft,,Sub TBD,Sub TBD,,TBD,TBD,TBD
+Polyaspartic — 3-Car (~600sf),TBD,600 sq ft,,Sub TBD,Sub TBD,,TBD,TBD,TBD
+"Full-Garage Flooring Upgrade: For 1RM / combo clients who want to extend gym-zone tiles to cover entire 2-car garage. Price this at $1,497 minimum to stay margin-positive.",,,,,,,,,
+SURCHARGES,,,,,,,,,
+Surcharge,Client Price,,,,,,Cost,Profit,Margin %
+Heavy Duty (+20% floor cov / vertical stack),350,,,,,,50,300,0.857
+BEFORE vs AFTER — ALL CHANGES,,,,,,,,,
+Service,Old Price,New Price,Change,,Old Margin,New Margin,,Old Profit,New Profit
+1 Rep Max,4497,4797,+$300,,0.266,0.512,,1195,2455
+The Dean's List,5997,6497,+$500,,0.291,0.462,,1744,3004
+The Valedictorian,7497,7997,+$500,,0.328,0.465,,2458,3718
+Key change: Gym-zone flooring on 1RM saved $960 in materials. Moderate price bumps ($300-$500) combined with cost reduction = massive margin jump.,,,,,,,,,
+ALL SERVICES RANKED BY MARGIN — FINAL,,,,,,,,,
+Service,Client Price,,,,,,Total Cost,Profit $,Margin %
+Heavy Duty Surcharge,350,,,,,,50,300,0.857
+Super Set (Gym),1997,,,,,,487,1510,0.7559999999999999
+Warm Up (Gym),997,,,,,,265,732,0.7340000000000001
+1 Rep Max (Gym) ⬆,4797,,,,,,2342,2455,0.512
+Extra Haul-Away,300,,,,,,150,150,0.5
+Doctorate (Garage),3797,,,,,,1937,1860,0.49
+Graduate (Garage),2197,,,,,,1151,1046,0.476
+Valedictorian (Combo) ⬆,7997,,,,,,4279,3718,0.465
+Dean's List (Combo) ⬆,6497,,,,,,3493,3004,0.462
+Undergrad (Garage),1097,,,,,,717,380,0.346
+Click-In Floor 1-Car,1497,,,,,,1110,387,0.259
+Click-In Floor 2-Car,2897,,,,,,2170,727,0.251
+Click-In Floor 3-Car,4297,,,,,,3230,1067,0.248
+ALL SERVICES RANKED BY PROFIT $ — FINAL,,,,,,,,,
+Service,Client Price,,,,,,Total Cost,Profit $,Margin %
+Valedictorian (Combo) ⬆,7997,,,,,,4279,3718,0.465
+Dean's List (Combo) ⬆,6497,,,,,,3493,3004,0.462
+1 Rep Max (Gym) ⬆,4797,,,,,,2342,2455,0.512
+Doctorate (Garage),3797,,,,,,1937,1860,0.49
+Super Set (Gym),1997,,,,,,487,1510,0.7559999999999999
+Click-In Floor 3-Car,4297,,,,,,3230,1067,0.248
+Graduate (Garage),2197,,,,,,1151,1046,0.476
+Warm Up (Gym),997,,,,,,265,732,0.7340000000000001
+Click-In Floor 2-Car,2897,,,,,,2170,727,0.251
+Click-In Floor 1-Car,1497,,,,,,1110,387,0.259
+Undergrad (Garage),1097,,,,,,717,380,0.346
+Heavy Duty Surcharge,350,,,,,,50,300,0.857
+Extra Haul-Away,300,,,,,,150,150,0.5
+FINAL PRICE SHEET — ALL SERVICES,,,,,,,,,
+Service,Client Price,Category,,,,,,,
+Undergrad,1097,Garage Org,,,,,,,
+Graduate,2197,Garage Org,,,,,,,
+Doctorate,3797,Garage Org,,,,,,,
+Warm Up,997,Gym Install,,,,,,,
+Super Set,1997,Gym Install,,,,,,,
+1 Rep Max,4797,Gym Install,,,,,,,
+The Dean's List,6497,Combo (Grad + 1RM),,,,,,,
+The Valedictorian,7997,Combo (Doc + 1RM),,,,,,,
+Heavy Duty Surcharge,350,Surcharge,,,,,,,
+Extra Haul-Away,300,A La Carte,,,,,,,
+Click-In Floor 1-Car,1497,A La Carte,,,,,,,
+Click-In Floor 2-Car,2897,A La Carte,,,,,,,
+Click-In Floor 3-Car,4297,A La Carte,,,,,,,
+Full-Garage Flooring Upgrade,1497,A La Carte (1RM/Combo add-on),,,,,,,
+KEY TAKEAWAYS,,,,,,,,,
+EVERY CORE SERVICE NOW 34%+ MARGIN. No service below 34.6% (Undergrad). Gym + Combo tiers all 46%+.,,,,,,,,,
+"VALEDICTORIAN = #1 PROFIT JOB: $3,718 per job at 46.5% margin. Was $2,458 at 32.8%. +$1,260 more profit per booking.",,,,,,,,,
+"DEAN'S LIST JUMPED 72% IN PROFIT: $3,004 per job (was $1,744). Moderate $500 price bump + cost reduction.",,,,,,,,,
+"1 REP MAX DOUBLED PROFIT: $2,455 per job (was $1,195). Only +$300 price increase — the gym-zone flooring scope did the heavy lifting.",,,,,,,,,
+"GYM-ZONE FLOORING = THE KEY MOVE: Scoping flooring to gym area (~200sf) instead of full garage saves $960/job. Full garage available as $1,497 a la carte upgrade.",,,,,,,,,
+"BUNDLE DISCOUNTS INTACT: Dean's List saves client $497, Valedictorian saves $597. Clean value prop without giving away margin.",,,,,,,,,
+"PRICE INCREASES WERE MODEST: +$300 on 1RM, +$500 on each combo. Not sticker shock — the cost reduction did most of the work.",,,,,,,,,
