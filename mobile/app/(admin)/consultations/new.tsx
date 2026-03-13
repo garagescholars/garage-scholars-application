@@ -28,12 +28,38 @@ import type {
   StylePreference,
 } from "../../../src/types";
 
-const SPACE_ANGLES: PhotoAngle[] = [
-  { key: "wide", label: "Full Space", instruction: "Stand at entrance, capture full interior — both walls visible", icon: "resize-outline" },
-  { key: "left", label: "Left Wall", instruction: "Face left wall floor to ceiling", icon: "arrow-back-outline" },
-  { key: "right", label: "Right Wall", instruction: "Face right wall floor to ceiling", icon: "arrow-forward-outline" },
-  { key: "floor", label: "Floor Detail", instruction: "Camera pointing down at center of floor", icon: "scan-outline" },
+// ── Photo protocol ────────────────────────────────────────────────────────
+// Required angles are determined by service type.
+// The AI uses each angle to route the correct product to its best source photo:
+//   wide    → hero shot, Pass 1 base, any back-wall item
+//   back    → cabinet runs (straight-on detail shot of back wall)
+//   left    → left-wall items (pegboard, slatwall, wall-mounted storage)
+//   right   → right-wall items (bike rack, slatwall, shelving)
+//   ceiling → overhead rack placement + joist direction detection
+//   floor   → flooring product mockups (polyaspartic, rubber tiles)
+
+const GARAGE_ORG_ANGLES: PhotoAngle[] = [
+  { key: "wide",    label: "Full Space",    instruction: "Stand at entrance — capture full interior, both walls visible. This is the hero shot.", icon: "resize-outline" },
+  { key: "back",    label: "Back Wall",     instruction: "Stand at garage entrance, face the back wall straight on — full wall floor to ceiling.", icon: "arrow-up-outline" },
+  { key: "left",    label: "Left Wall",     instruction: "Face left wall floor to ceiling — capture the full surface for wall-mounted storage.", icon: "arrow-back-outline" },
+  { key: "right",   label: "Right Wall",    instruction: "Face right wall floor to ceiling — bike racks and slatwall go here.", icon: "arrow-forward-outline" },
+  { key: "ceiling", label: "Ceiling",       instruction: "Point camera straight up at ceiling — captures joist direction and opener location for overhead racks.", icon: "chevron-up-outline" },
 ];
+
+const GYM_INSTALL_ANGLES: PhotoAngle[] = [
+  { key: "wide",  label: "Full Space",  instruction: "Stand at entrance — capture full interior, both walls visible.", icon: "resize-outline" },
+  { key: "back",  label: "Back Wall",   instruction: "Face back wall straight on — mirrors and racks go here.", icon: "arrow-up-outline" },
+  { key: "left",  label: "Left Wall",   instruction: "Face left wall — cable machines and wall storage.", icon: "arrow-back-outline" },
+  { key: "right", label: "Right Wall",  instruction: "Face right wall — rack placement and dumbbell storage.", icon: "arrow-forward-outline" },
+  { key: "floor", label: "Floor Detail", instruction: "Point camera down at center of floor — flooring product mockups.", icon: "scan-outline" },
+];
+
+// Required angles that must be captured before submitting.
+// wide is always required. The rest are required by service type.
+const REQUIRED_ANGLES: Record<ConsultationServiceType, string[]> = {
+  garage_org:  ["wide", "back", "right", "ceiling"],
+  gym_install: ["wide", "back", "right"],
+};
 
 const GARAGE_SIZES: { key: GarageSize; label: string }[] = [
   { key: "1-car", label: "1-Car" },
@@ -105,8 +131,13 @@ export default function NewConsultation() {
   };
 
   const handlePhotosComplete = async (photos: Record<string, string>) => {
-    if (!photos.wide) {
-      Alert.alert("Missing Photo", "The wide/full space photo is required.");
+    const required = REQUIRED_ANGLES[form.serviceType];
+    const missing  = required.filter((k) => !photos[k]);
+    if (missing.length > 0) {
+      const labels = (form.serviceType === "garage_org" ? GARAGE_ORG_ANGLES : GYM_INSTALL_ANGLES)
+        .filter((a) => missing.includes(a.key))
+        .map((a) => a.label);
+      Alert.alert("Missing Required Photos", `Please capture: ${labels.join(", ")}`);
       return;
     }
 
@@ -189,13 +220,17 @@ export default function NewConsultation() {
     }
   };
 
+  const activeAngles = form.serviceType === "garage_org" ? GARAGE_ORG_ANGLES : GYM_INSTALL_ANGLES;
+  const requiredKeys = REQUIRED_ANGLES[form.serviceType];
+
   if (showCapture) {
     return (
       <GuidedItemCapture
-        angles={SPACE_ANGLES}
+        angles={activeAngles}
+        requiredAngles={requiredKeys}
         onComplete={handlePhotosComplete}
         onCancel={() => setShowCapture(false)}
-        title="Capture Space Photos"
+        title={`Capture Space Photos (${requiredKeys.length} required)`}
       />
     );
   }
@@ -398,7 +433,9 @@ export default function NewConsultation() {
         </TouchableOpacity>
 
         <Text style={styles.hint}>
-          Take or upload 4 photos: full space, left wall, right wall, and floor detail.
+          {form.serviceType === "garage_org"
+            ? "5 shots needed: Full Space · Back Wall · Left Wall · Right Wall · Ceiling. All required shots must be captured before the mockup can generate."
+            : "5 shots needed: Full Space · Back Wall · Left Wall · Right Wall · Floor. All required shots must be captured before the mockup can generate."}
         </Text>
       </ScrollView>
     </KeyboardAvoidingView>

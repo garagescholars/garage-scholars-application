@@ -68,16 +68,16 @@ const SPATIAL =
   "Keep every item already in the garage exactly as-is — only add the new item described. " +
   "Photorealistic, brand new, professionally installed. ";
 
-// ── OVERHEAD RACK — key fix: explicitly forbid garage door attachment ─────────
-// The rack anchors ONLY to ceiling joists via steel drop rods.
-// Naming the forbidden anchor points prevents the model from latching onto door tracks.
+// ── OVERHEAD RACK — place in BACK HALF of ceiling, far from door motor ───────
+// Explicitly anchor to back half + name the motor as a forbidden zone.
 const OVERHEAD_RACK_PROMPT =
   SPATIAL +
-  "Add one large overhead ceiling storage rack (approximately 8 feet wide, 4 feet deep) mounted in the CENTER of the ceiling — in the open space between the garage door and the back wall. " +
-  "The rack is suspended from the ceiling ONLY by four short vertical steel rods (drop rods) bolted directly into the ceiling joists above. " +
-  "The rack does NOT touch, connect to, or attach to the garage door, garage door tracks, garage door rails, any wall, or any other structure. " +
-  "The rack hangs flat and level, roughly 18 inches below the ceiling, with gray wire mesh shelving surface. " +
-  "Stack 6–8 large gray Greenmade storage bins (gray body, green lid) neatly on top of the rack. " +
+  "Add one large overhead ceiling storage rack (approximately 8 feet wide, 4 feet deep) mounted in the BACK HALF of the ceiling — directly above the back wall area, as far from the garage door and garage door motor as possible. " +
+  "The rack is suspended from the ceiling ONLY by four short vertical steel drop rods bolted into the ceiling joists. " +
+  "The rack is completely separate from and does NOT overlap with, attach to, or touch the garage door opener motor, garage door chain rail, garage door tracks, or garage door in any way. " +
+  "The garage door opener motor remains visible and unchanged on its own rail closer to the front of the garage. " +
+  "The rack hangs flat and level in the back ceiling zone, with gray wire mesh decking. " +
+  "Stack 6 large gray storage bins (gray body, green lid) neatly on top of the rack. " +
   "Nothing else changes.";
 
 // ── TIER 2: THE GRADUATE — shelving + bins + 1 overhead rack ─────────────────
@@ -132,9 +132,10 @@ async function main() {
   console.log("Pass 2b: Overhead racks above cabinets (guidance 5)...");
   const t3_rack_prompt =
     SPATIAL +
-    "Add one overhead ceiling storage rack (approximately 8 feet wide, 4 feet deep) mounted in the CENTER of the ceiling in the open space above the garage floor — " +
-    "suspended ONLY from ceiling joists by four short vertical steel drop rods, NOT connected to the garage door, door tracks, rails, or walls. " +
-    "The rack hangs flat and level with 6 gray Greenmade bins stacked on top. Nothing else changes.";
+    "Add one overhead ceiling storage rack (approximately 8 feet wide, 4 feet deep) mounted in the BACK HALF of the ceiling, directly above the cabinet countertop area — " +
+    "suspended ONLY from ceiling joists by four short vertical steel drop rods. " +
+    "The rack is completely separate from the garage door opener motor and its rail — the motor remains visible and unchanged closer to the front of the garage. " +
+    "The rack hangs flat and level in the back ceiling zone with 6 gray storage bins on top. Nothing else changes.";
   const t3_final_url = await callKontext(t3_cab_url, t3_rack_prompt, [REFS.overhead_rack], 5.0);
   await save(t3_final_url, "tier3_final.png");
   console.log("Tier 3 done.\n");

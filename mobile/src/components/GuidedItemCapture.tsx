@@ -25,6 +25,7 @@ type Props = {
   onCancel: () => void;
   title?: string;
   allowExtra?: boolean;
+  requiredAngles?: string[];
 };
 
 export const RESALE_ANGLES: PhotoAngle[] = [
@@ -105,13 +106,17 @@ export default function GuidedItemCapture({
   onCancel,
   title = "Capture Photos",
   allowExtra = false,
+  requiredAngles = [],
 }: Props) {
   const [currentStep, setCurrentStep] = useState(0);
   const [photos, setPhotos] = useState<Record<string, string>>({});
   const [extraPhotos, setExtraPhotos] = useState<string[]>([]);
   const [showReview, setShowReview] = useState(false);
 
-  const isAllCaptured = angles.every((a) => photos[a.key]);
+  // Allow submit when all REQUIRED angles are captured (optional extras can be skipped)
+  const isAllCaptured = requiredAngles.length > 0
+    ? requiredAngles.every((k) => photos[k])
+    : angles.every((a) => photos[a.key]);
   const currentAngle = angles[currentStep];
 
   const handlePhotoCaptured = (uri: string) => {
@@ -222,11 +227,19 @@ export default function GuidedItemCapture({
         </Text>
 
         <ScrollView style={styles.reviewScroll} showsVerticalScrollIndicator={false}>
-          {angles.map((angle) => (
+          {angles.map((angle) => {
+            const isRequired = requiredAngles.includes(angle.key);
+            const isMissing  = !photos[angle.key];
+            return (
             <View key={angle.key} style={styles.reviewItem}>
               <View style={styles.reviewHeader}>
                 <Ionicons name={angle.icon} size={18} color="#14b8a6" />
                 <Text style={styles.reviewLabel}>{angle.label}</Text>
+                {isRequired && (
+                  <View style={[styles.requiredBadge, !isMissing && styles.requiredBadgeDone]}>
+                    <Text style={styles.requiredBadgeText}>{isMissing ? "REQUIRED" : "DONE"}</Text>
+                  </View>
+                )}
               </View>
               {photos[angle.key] ? (
                 <View>
@@ -245,7 +258,8 @@ export default function GuidedItemCapture({
                 </View>
               )}
             </View>
-          ))}
+            );
+          })}
 
           {allowExtra && (
             <View style={styles.extraSection}>
@@ -515,6 +529,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "700",
     color: "#f8fafc",
+    flex: 1,
+  },
+  requiredBadge: {
+    backgroundColor: "#ef4444",
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  requiredBadgeDone: {
+    backgroundColor: "#14b8a6",
+  },
+  requiredBadgeText: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: "#fff",
+    letterSpacing: 0.5,
   },
   reviewPhoto: {
     width: "100%",
