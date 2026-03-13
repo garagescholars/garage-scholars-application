@@ -54,3 +54,12 @@ David Test/*.HEIC
 David Test/*.jpg
 David Test/*.png
 ~$*
+
+# Mockups — AI mockup experiments, test images, large binaries
+Mockups/
+
+# Large spreadsheets
+*.xlsx
+
+# Claude memory (local only)
+.claude/
